@@ -1,0 +1,15 @@
+[package]
+name = "spdyboost"
+version = "0.1.0"
+authors = ["Laurens Devos <laurens.devos@outlook.com>"]
+autobenches = false
+
+[dependencies]
+
+[dev-dependencies]
+criterion = "0.2"
+rand = "0.6.1"
+
+[[bench]]
+name = "bitslice"
+harness = false
