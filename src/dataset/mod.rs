@@ -1,10 +1,9 @@
-use bits::FullBitSet;
 
 pub enum FeatureFormat {
     /// Representation for raw integer data
-    Ints(Vec<i64>),
+    Ints(Vec<i32>),
 
-    BitSets(Vec<FullBitSet>),
+    BitSets(Vec<i64>),
 }
 
 pub struct Feature {

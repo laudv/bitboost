@@ -4,30 +4,58 @@ extern crate rand;
 extern crate spdyboost;
 
 use criterion::Criterion;
-use spdyboost::bits::{ValueStore, BitSlice4};
-
-mod util;
+use spdyboost::bits::{BitSet, BitSlice};
 
 const NVALUES: usize = 1_000_000;
 
-fn bench_bitslice2(c: &mut Criterion) {
-    c.bench_function("bitslice2_sum", |b| {
-        let slice = util::gen_bitslice2(NVALUES);
-        let select = util::gen_select_full(NVALUES, 0.5);
-        b.iter(|| slice.sum_full(&select))
+fn bench_bitslice_sum1(c: &mut Criterion) {
+    let slice = BitSlice::random(NVALUES, 1);
+    c.bench_function("bitslice_sum1", move |b| {
+        b.iter(|| slice.sum())
     });
 }
 
-fn bench_bitslice4(c: &mut Criterion) {
-    c.bench_function("bitslice4_sum", |b| {
-        let slice = util::gen_bitslice4(NVALUES);
-        let select = util::gen_select_full(NVALUES, 0.5);
-        b.iter(|| slice.sum_full(&select))
+fn bench_bitslice_sum2(c: &mut Criterion) {
+    let slice = BitSlice::random(NVALUES, 2);
+    c.bench_function("bitslice_sum2", move |b| {
+        b.iter(|| slice.sum())
+    });
+}
+
+fn bench_bitslice_sum4(c: &mut Criterion) {
+    let slice = BitSlice::random(NVALUES, 4);
+    c.bench_function("bitslice_sum4", move |b| {
+        b.iter(|| slice.sum())
+    });
+}
+
+fn bench_bitslice_sum1_masked(c: &mut Criterion) {
+    let slice = BitSlice::random(NVALUES, 1);
+    let mask = BitSet::random(NVALUES, 0.25);
+    c.bench_function("bitslice_sum_masked1", move |b| {
+        b.iter(|| slice.sum_masked(&mask))
+    });
+}
+
+fn bench_bitslice_sum2_masked(c: &mut Criterion) {
+    let slice = BitSlice::random(NVALUES, 2);
+    let mask = BitSet::random(NVALUES, 0.25);
+    c.bench_function("bitslice_sum_masked2", move |b| {
+        b.iter(|| slice.sum_masked(&mask))
+    });
+}
+
+fn bench_bitslice_sum4_masked(c: &mut Criterion) {
+    let slice = BitSlice::random(NVALUES, 4);
+    let mask = BitSet::random(NVALUES, 0.25);
+    c.bench_function("bitslice_sum_masked4", move |b| {
+        b.iter(|| slice.sum_masked(&mask))
     });
 }
 
 criterion_group!(benches,
-                 //bench_bitslice2,
-                 bench_bitslice4,
+                 bench_bitslice_sum1_masked,
+                 bench_bitslice_sum2_masked,
+                 bench_bitslice_sum4_masked,
                  );
 criterion_main!(benches);

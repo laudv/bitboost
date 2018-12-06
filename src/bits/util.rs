@@ -1,4 +1,4 @@
-use bits::bitblock::{BitBlockOps, BitBlock};
+use bits::bitblock::BitBlock;
 
 pub struct Bool2BlockIter<I>
 where I: Iterator<Item = bool> {
@@ -16,11 +16,11 @@ impl<I> Iterator for Bool2BlockIter<I>
 where I: Iterator<Item = bool> {
     type Item = BitBlock;
     fn next(&mut self) -> Option<BitBlock> {
-        let mut block: BitBlock = 0;
+        let mut block = BitBlock::zero();
         let mut iter_empty = true;
         for i in 0..BitBlock::nbits() {
             if let Some(b) = self.iter.next() {
-                block = block.set_bit(i, b);
+                block.set_bit(i, b);
                 iter_empty = false;
             }
         }

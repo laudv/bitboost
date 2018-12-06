@@ -5,10 +5,15 @@ authors = ["Laurens Devos <laurens.devos@outlook.com>"]
 autobenches = false
 
 [dependencies]
+num = "0.2"
+rand = "0.6.1"
 
 [dev-dependencies]
 criterion = "0.2"
-rand = "0.6.1"
+
+[[bench]]
+name = "bitset"
+harness = false
 
 [[bench]]
 name = "bitslice"
