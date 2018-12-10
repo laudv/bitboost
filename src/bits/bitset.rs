@@ -95,7 +95,7 @@ mod test {
 
     #[test]
     fn test_bitset_count_ones() {
-        let n = 100_000;
+        let n = 10_000;
         let frac1 = 0.25;
 
         for _ in 0..10 {
