@@ -7,8 +7,6 @@ use criterion::{Criterion, Bencher, Fun};
 
 use spdyboost::bits::BitSet;
 
-mod util;
-
 const NVALUES: usize = 1_000_000;
 
 fn bench_bitset_popcnt(b: &mut Bencher, frac1: &f64) {
