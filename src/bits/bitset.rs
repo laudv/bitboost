@@ -1,14 +1,14 @@
-use std::fmt::{Debug, Result as FmtResult, Formatter};
+//use std::fmt::{Debug, Result as FmtResult, Formatter};
 use std::ops::{Deref, DerefMut};
 
 use rand::prelude::*;
 use rand::distributions::Bernoulli;
 
-use bits::{BitBlock, BitVec};
+use bits::BitVec;
 
 pub struct BitSet {
     vec: BitVec,
-    one_count: u64,
+    //one_count: u64,
 }
 
 impl BitSet {
@@ -25,12 +25,9 @@ impl BitSet {
     }
 
     pub fn from_bitvec(vec: BitVec) -> BitSet {
-        let mut bs = BitSet {
+        BitSet {
             vec: vec,
-            one_count: 0,
-        };
-        bs.one_count = bs.count_ones();
-        bs
+        }
     }
 
     pub fn random(nbits: usize, frac1: f64) -> BitSet {

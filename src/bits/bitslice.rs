@@ -22,7 +22,6 @@ pub struct BitSlice {
 }
 
 impl BitSlice {
-
     pub fn new(nbits: usize, width: u8) -> BitSlice {
         assert!(width == 1 || width == 2 || width == 4, "width {} not supported", width);
 
@@ -78,6 +77,8 @@ impl BitSlice {
     pub fn nblocks(&self) -> usize { self.vec.nblocks() }
     pub fn nbytes(&self) -> usize { self.vec.nbytes() }
     pub fn nbits(&self) -> usize { self.vec.nbits() }
+    pub fn width(&self) -> u8 { self.width }
+    pub fn nunique_values(&self) -> u8 { 1 << self.width }
 
     pub fn sum(&self) -> u64 {
         debug_assert!(self.width == 1 || self.width == 2 || self.width == 4);
