@@ -22,3 +22,4 @@ pub mod conf;
 pub mod dataset;
 pub mod bits;
 pub mod tree;
+pub mod objective;

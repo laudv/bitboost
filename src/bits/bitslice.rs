@@ -26,7 +26,7 @@ impl BitSlice {
         assert!(width == 1 || width == 2 || width == 4, "width {} not supported", width);
 
         let nblocks = BitBlock::blocks_required_for(nbits);
-        let vec = BitVec::new_with_nblocks(nblocks * width as usize);
+        let vec = BitVec::zero_blocks(nblocks * width as usize);
 
         BitSlice {
             vec: vec,
@@ -157,7 +157,7 @@ mod test {
         let n = 10_000;
         for &width in &[1u8, 2u8, 4u8] {
             let mut bs = BitSlice::new(n, width);
-            let mut mask = BitSet::new(n);
+            let mut mask = BitSet::falses(n);
 
             assert_eq!(bs.sum(), 0);
 

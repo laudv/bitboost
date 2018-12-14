@@ -12,8 +12,8 @@ unsafe fn count_ones_u64(v: __m256i) -> __m256i {
     //_mm256_loadu_si256(counts[..].as_mut_ptr() as *mut __m256i)
 
     // -- IMPL 2 --
-    let mut buffer = BitBlock::zero(); // 32 byte aligned!
-    let mut counts = BitBlock::zero();
+    let mut buffer = BitBlock::zeros(); // 32 byte aligned!
+    let mut counts = BitBlock::zeros();
     _mm256_store_si256(buffer.as_mut_ptr() as *mut __m256i, v);
     {
         let bufptr = buffer.as_ptr() as *const u64;

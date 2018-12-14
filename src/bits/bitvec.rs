@@ -12,15 +12,27 @@ pub struct BitVec {
 
 impl BitVec {
 
-    pub fn new(nbits: usize) -> BitVec {
+    pub fn zero_bits(nbits: usize) -> BitVec {
         assert!(nbits > 0);
         let nblocks = BitBlock::blocks_required_for(nbits);
-        Self::new_with_nblocks(nblocks)
+        Self::zero_blocks(nblocks)
     }
 
-    pub fn new_with_nblocks(nblocks: usize) -> BitVec {
+    pub fn one_bits(nbits: usize) -> BitVec {
+        assert!(nbits > 0);
+        let nblocks = BitBlock::blocks_required_for(nbits);
+        Self::one_blocks(nblocks)
+    }
+
+    pub fn zero_blocks(nblocks: usize) -> BitVec {
         assert!(nblocks > 0);
-        let blocks = vec![BitBlock::zero(); nblocks];
+        let blocks = vec![BitBlock::zeros(); nblocks];
+        BitVec { blocks: blocks }
+    }
+
+    pub fn one_blocks(nblocks: usize) -> BitVec {
+        assert!(nblocks > 0);
+        let blocks = vec![BitBlock::ones(); nblocks];
         BitVec { blocks: blocks }
     }
 
@@ -160,7 +172,7 @@ mod test {
     #[test]
     fn test_get() {
         let n = 1000;
-        let mut vec = BitVec::new(n*32);
+        let mut vec = BitVec::zero_bits(n*32);
         for i in 0..n {
             *vec.get_mut::<u32>(i) = i as u32;
         }

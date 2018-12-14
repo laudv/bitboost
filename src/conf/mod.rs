@@ -1,6 +1,6 @@
-use std::boxed::Box;
 use std::default::Default;
-use std::rc::Rc;
+
+use dataset::NumericalType;
 
 #[derive(PartialEq, Eq)]
 pub enum Objective {
@@ -18,6 +18,8 @@ pub struct Config {
     pub ignored_features: Vec<usize>,
     pub target_feature: usize,
 
+    pub target_values_limits: (NumericalType, NumericalType),
+
     //#[serde(flatten)]
     //extra: HashMap<String, Value>,
 }
@@ -32,6 +34,7 @@ impl Default for Config {
             lowcard_nominal_features: Vec::new(),
             ignored_features: Vec::new(),
             target_feature: 0,
+            target_values_limits: (-1.0, 1.0),
         }
     }
 }

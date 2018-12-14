@@ -61,8 +61,13 @@ impl BitBlock {
     pub fn nbytes() -> usize { size_of::<Self>() }
     pub fn nbits() -> usize { Self::nbytes() * 8 }
 
-    pub fn zero() -> BitBlock {
+    pub fn zeros() -> BitBlock {
         let bytes: [u8; BITBLOCK_BYTES] = [0u8; BITBLOCK_BYTES];
+        BitBlock { bytes: bytes }
+    }
+
+    pub fn ones() -> BitBlock {
+        let bytes: [u8; BITBLOCK_BYTES] = [0xFFu8; BITBLOCK_BYTES];
         BitBlock { bytes: bytes }
     }
 
@@ -82,7 +87,7 @@ impl BitBlock {
           I: Iterator<Item = T>
     {
         let mut iter_done = false;
-        let mut bb = BitBlock::zero();
+        let mut bb = BitBlock::zeros();
         {
             let bb_arr = bb.cast_mut::<T>();
             for i in 0..bb_arr.len() {
@@ -102,7 +107,7 @@ impl BitBlock {
     pub fn from_bool_iter<I>(iter: &mut I) -> (bool, BitBlock)
     where I: Iterator<Item = bool> {
         let mut iter_done = false;
-        let mut bb = BitBlock::zero();
+        let mut bb = BitBlock::zeros();
         for i in 0..BitBlock::nbits() {
             if let Some(b) = iter.next() {
                 bb.set_bit(i, b);
@@ -122,7 +127,7 @@ impl BitBlock {
     }
 
     pub fn from_4u64(a: u64, b: u64, c: u64, d: u64) -> BitBlock {
-        let mut bb = BitBlock::zero();
+        let mut bb = BitBlock::zeros();
         {
             let bb_arr = bb.cast_mut::<u64>();
             bb_arr[0] = a;
@@ -198,7 +203,7 @@ impl BitBlock {
 
 impl <T: Integer> From<T> for BitBlock {
     fn from(v: T) -> BitBlock {
-        let mut bb = BitBlock::zero();
+        let mut bb = BitBlock::zeros();
         bb.cast_mut::<T>()[0] = v;
         bb
     }
@@ -206,7 +211,20 @@ impl <T: Integer> From<T> for BitBlock {
 
 #[cfg(test)]
 mod test {
-    use super::BitBlock;
+    use super::{BitBlock, BITBLOCK_BYTES};
+
+    #[test]
+    fn test_bitblock0() {
+        let zeros = BitBlock::zeros();
+        for i in 0..BITBLOCK_BYTES {
+            assert_eq!(0, zeros.cast::<u8>()[i]);
+        }
+
+        let ones = BitBlock::ones();
+        for i in 0..BITBLOCK_BYTES {
+            assert_eq!(0xFF, ones.cast::<u8>()[i]);
+        }
+    }
 
     #[test]
     fn test_bitblock1() {
@@ -250,7 +268,7 @@ mod test {
 
     #[test]
     fn test_bitblock4() {
-        let mut bb = BitBlock::zero();
+        let mut bb = BitBlock::zeros();
         bb.set_bit(10, true);
         assert!(bb.get_bit(10) == true);
         assert!(bb.cast::<u64>()[0] == 0x400);

@@ -198,7 +198,7 @@ impl <'a> DataSetBuilder<'a> {
                     return Err(format!("low cardinality nominal feature with more than {} distinct
                                        values", self.config.max_lowcard_nominal_cardinality));
                 }
-                map.insert(v, BitSet::new(len));
+                map.insert(v, BitSet::falses(len));
             }
 
             if let Some(bs) = map.get_mut(&v) {
@@ -301,15 +301,16 @@ impl DataElem {
 // - DataSet impl ---------------------------------------------------------------------------------
 
 impl DataSet {
-    pub fn len(&self) -> usize { self.len }
+    pub fn nexamples(&self) -> usize { self.len }
     pub fn get_feature(&self, id: usize) -> &Feature { &self.input_features[id] }
     pub fn get_feature_mut(&mut self, id: usize) -> &mut Feature { &mut self.input_features[id] }
 
-    pub fn get_inputs(&self) -> impl Iterator<Item = &Feature> {
+    pub fn ninput_features(&self) -> usize { self.input_features.len() }
+    pub fn get_input_features(&self) -> impl Iterator<Item = &Feature> {
         self.input_features.iter()
     }
 
-    pub fn get_target(&self) -> &Feature {
+    pub fn get_target_feature(&self) -> &Feature {
         &self.target_feature
     }
 }

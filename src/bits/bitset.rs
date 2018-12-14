@@ -13,8 +13,13 @@ pub struct BitSet {
 
 impl BitSet {
 
-    pub fn new(nbits: usize) -> BitSet {
-        let vec = BitVec::new(nbits);
+    pub fn falses(nbits: usize) -> BitSet {
+        let vec = BitVec::zero_bits(nbits);
+        Self::from_bitvec(vec)
+    }
+
+    pub fn trues(nbits: usize) -> BitSet {
+        let vec = BitVec::one_bits(nbits);
         Self::from_bitvec(vec)
     }
 

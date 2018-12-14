@@ -54,6 +54,17 @@ impl TargetValues {
         let sum = self.bitslice.sum_masked(mask) as NumericalType;
         self.linproj(sum, count)
     }
+
+    pub fn mean(&self) -> NumericalType {
+        let sum = self.sum();
+        sum / self.len as NumericalType
+    }
+
+    pub fn mean_masked(&self, mask: &BitSet) -> NumericalType {
+        let count = mask.count_ones() as NumericalType;
+        let sum = self.bitslice.sum_masked(mask) as NumericalType;
+        self.linproj(sum, count) / count as NumericalType
+    }
 }
 
 
@@ -75,15 +86,19 @@ mod test {
         let sum_actual = v_capped.iter().sum();
         let target_values = TargetValues::new(v.len(), 2, v.iter().map(|&x| x), -0.25, 0.50);
         let sum = target_values.sum();
+        let mean = target_values.mean();
 
         for (i, &x) in v_capped.iter().enumerate() {
             assert_eq!(target_values.get_value(i), x);
         }
         assert_eq!(sum, sum_actual);
+        assert_eq!(mean, sum_actual / 8.0);
 
         let mask = BitSet::from_bool_iter(vec![1,1,0,0,0,0,1,1].into_iter().map(|x| x==1));
         assert_eq!(target_values.sum_masked(&mask), 1.0);
+        assert_eq!(target_values.mean_masked(&mask), 1.0 / 4.0);
         let mask = BitSet::from_bool_iter(vec![1,1,0,0,0,0,1,1].into_iter().map(|x| x==0));
         assert_eq!(target_values.sum_masked(&mask), 0.75);
+        assert_eq!(target_values.mean_masked(&mask), 0.75 / 4.0);
     }
 }
