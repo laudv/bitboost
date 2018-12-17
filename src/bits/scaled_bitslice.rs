@@ -37,6 +37,19 @@ macro_rules! scaled_bitslice_impl {
                 }
             }
 
+            pub fn random(len: usize, nbits: u8, lower_lim: $t, upper_lim: $t)
+                -> ScaledBitSlice<$t>
+            {
+                let slice = BitSlice::random(len, nbits);
+
+                ScaledBitSlice {
+                    bitslice: slice,
+                    lower_lim: lower_lim,
+                    upper_lim: upper_lim,
+                    len: len,
+                }
+            }
+
             fn linproj(&self, value: $t, n: $t) -> $t {
                 let maxval = (self.bitslice.nunique_values() - 1) as $t;
                 (value / maxval) * (self.upper_lim - self.lower_lim) + n * self.lower_lim
@@ -80,6 +93,13 @@ macro_rules! scaled_bitslice_impl {
                 let count = mask.true_count() as $t;
                 let sum = self.bitslice.sum_masked(mask) as $t;
                 self.linproj(sum, count) / count
+            }
+
+            pub fn sum_filtered(&self, parent: &BitSet, left: &BitSet) -> (u64, u64, $t, $t) {
+                let (leftc, rightc, lefts, rights) = self.bitslice.sum_filtered(parent, left);
+                let left_sum = self.linproj(lefts as $t, leftc as $t);
+                let right_sum = self.linproj(rights as $t, rightc as $t);
+                (leftc, rightc, left_sum, right_sum)
             }
         }
     }
@@ -135,5 +155,30 @@ mod test {
 
         assert_eq!(vs.sum_masked(&m1and2),      vs.sum_masked_and(&m1, &m2, 2));
         assert_eq!(vs.sum_masked(&m1andnot2),   vs.sum_masked_andnot(&m1, &m2, 2));
+    }
+
+    #[test]
+    fn test_scaled_bitslice_sum_filtered() {
+        let n = 10_000;
+        let slice = ScaledBitSlice::<f32>::random(n, 4, -1.0, 1.0);
+        let mask1 = BitSet::random(n, 0.25);
+        let mask2 = BitSet::random(n, 0.50);
+
+        let mask_and: BitSet = mask1.and(&mask2).into_bitset(n);
+        let mask_andnot: BitSet = mask1.andnot(&mask2).into_bitset(n);
+
+        let lefts1  = slice.sum_masked(&mask_and);
+        let rights1 = slice.sum_masked(&mask_andnot);
+
+        let (lc, rc, lefts2, rights2) = slice.sum_filtered(&mask1, &mask2);
+
+        println!("{:?}", (lefts1, rights1));
+        println!("{:?}", (lefts2, rights2));
+
+        assert_eq!(lefts1, lefts2);
+        assert_eq!(rights1, rights2);
+
+        assert_eq!(lc, mask_and.true_count());
+        assert_eq!(rc, mask_andnot.true_count());
     }
 }

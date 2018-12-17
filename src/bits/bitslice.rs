@@ -117,13 +117,62 @@ impl BitSlice {
         let f = unsafe { SUM_MASKED_ANDNOT_FUN_PTRS.get_unchecked(self.width as usize - 1) };
         f(&self.vec, mask1, mask2)
     }
+
+    /// Compute (left count, right count, sum_left, sum_right)
+    pub fn sum_filtered(&self, parent: &BitSet, left: &BitSet) -> (u64, u64, u64, u64) {
+        debug_assert!(self.width == 4); // only implemented for 4 bits for now
+
+        let mut left_count = 0u64;
+        let mut right_count = 0u64;
+        let mut left_sum_counts = [0u64; 4];
+        let mut right_sum_counts = [0u64; 4];
+
+        let n = self.nblocks();
+        let blocks = self.vec.cast::<u64>();
+        let parent_blocks = parent.cast::<u64>();
+        let left_blocks = left.cast::<u64>();
+
+        assert_eq!(blocks.len(), 4 * n);
+        assert_eq!(parent_blocks.len(),  n);
+        assert_eq!(left_blocks.len(), n);
+
+        for i in 0..n {
+            let xp = unsafe { parent_blocks.get_unchecked(i) };
+            let xl = unsafe { left_blocks.get_unchecked(i) };
+
+            let mask_and = xp & xl;
+            let mask_andnot = xp & !xl;
+
+            left_count += mask_and.count_ones() as u64;
+            right_count += mask_andnot.count_ones() as u64;
+
+            for j in 0..4 {
+                let b = unsafe { blocks.get_unchecked(4*i + j) };
+                left_sum_counts[j] += (b & mask_and).count_ones() as u64;
+                right_sum_counts[j] += (b & mask_andnot).count_ones() as u64;
+            }
+        }
+
+        let left_sum =
+                left_sum_counts[0] +
+            2 * left_sum_counts[1] +
+            4 * left_sum_counts[2] +
+            8 * left_sum_counts[3];
+        let right_sum =
+                right_sum_counts[0] +
+            2 * right_sum_counts[1] +
+            4 * right_sum_counts[2] +
+            8 * right_sum_counts[3];
+
+        (left_count, right_count, left_sum, right_sum)
+    }
 }
 
 
 
 #[cfg(test)]
 mod test {
-    use bits::{BitSlice, BitVec};
+    use bits::{BitSlice, BitVec, BitSet};
 
     #[test]
     fn test_bitslice_len() {
@@ -239,5 +288,25 @@ mod test {
             assert_eq!(sum1, sum3);
             assert_eq!(sum2, sum4);
         }
+    }
+
+    #[test]
+    fn test_bitslice_filtered() {
+        let n = 10_000;
+
+        let slice = BitSlice::random(n, 4);
+        let mask1 = BitSet::random(n, 0.25);
+        let mask2 = BitSet::random(n, 0.50);
+
+        let leftc1 = mask1.and(&mask2).count_ones();
+        let rightc1 = mask1.andnot(&mask2).count_ones();
+
+        let (leftc2, rightc2, lefts2, rights2) = slice.sum_filtered(&mask1, &mask2);
+
+        println!("{:?}", (leftc1, rightc1, 0, 0));
+        println!("{:?}", (leftc2, rightc2, lefts2, rights2));
+
+        assert_eq!(leftc1, leftc2);
+        assert_eq!(rightc1, rightc2);
     }
 }
