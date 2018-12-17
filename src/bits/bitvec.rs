@@ -2,9 +2,13 @@ use std::mem::size_of;
 use std::ops::{Deref, DerefMut};
 use std::slice;
 
+use rand::prelude::*;
+use rand::distributions::Bernoulli;
+
 use num::Integer;
 
-use bits::BitBlock;
+use bits::{BitBlock, BitSet};
+use bits::simd;
 
 pub struct BitVec {
     blocks: Vec<BitBlock>,
@@ -21,7 +25,21 @@ impl BitVec {
     pub fn one_bits(nbits: usize) -> BitVec {
         assert!(nbits > 0);
         let nblocks = BitBlock::blocks_required_for(nbits);
-        Self::one_blocks(nblocks)
+        let mut vec = Self::one_blocks(nblocks);
+        {
+            let u64s = vec.cast_mut::<u64>();
+            let mut zeros = nblocks * BitBlock::nbits() - nbits;
+            let mut i = u64s.len()-1;
+            loop {
+                if zeros >= 64 { u64s[i] = 0; }
+                else           { u64s[i] >>= zeros; }
+
+                i -= 1;
+                if zeros > 64 { zeros -= 64; }
+                else          { break; }
+            }
+        }
+        vec
     }
 
     pub fn zero_blocks(nblocks: usize) -> BitVec {
@@ -45,6 +63,12 @@ impl BitVec {
             if done { break; }
         }
         BitVec { blocks: blocks }
+    }
+
+    pub fn random(nbits: usize, frac1: f64) -> BitVec {
+        let mut rng = thread_rng();
+        let dist = Bernoulli::new(frac1);
+        BitVec::from_bool_iter(rng.sample_iter(&dist).take(nbits))
     }
 
     pub fn nblocks(&self) -> usize { self.blocks.len() }
@@ -111,6 +135,46 @@ impl BitVec {
         debug_assert!(self.blocks.len() > 0);
         self.blocks.as_mut_ptr() as *mut u8
     }
+
+    pub fn count_ones_popcnt(&self) -> u64 {
+        let mut count = 0;
+        for i in 0..self.nblocks() {
+            count += self.get_block(i).count_ones() as u64;
+        }
+        count
+    }
+
+    pub fn count_ones_avx2(&self) -> u64 {
+        simd::bitvec_count_ones(&self)
+    }
+
+    pub fn count_ones(&self) -> u64 {
+        self.count_ones_avx2()
+    }
+
+    pub fn count_and(&self, other: &BitVec) -> u64 {
+        simd::bitvec_count_and(&self, other)
+    }
+
+    pub fn count_andnot(&self, other: &BitVec) -> u64 {
+        simd::bitvec_count_andnot(&self, other)
+    }
+
+    /// Compute self & other
+    pub fn and(&self, other: &BitVec) -> BitVec {
+        let v = simd::and(&self, other);
+        BitVec { blocks: v }
+    }
+
+    /// Compute self & ~other
+    pub fn andnot(&self, other: &BitVec) -> BitVec {
+        let v = simd::andnot(&self, other);
+        BitVec { blocks: v }
+    }
+
+    pub fn into_bitset(self, used_nbits: usize) -> BitSet {
+        BitSet::from_bitvec(used_nbits, self)
+    }
 }
 
 impl Deref for BitVec {
@@ -126,8 +190,7 @@ impl DerefMut for BitVec {
 
 #[cfg(test)]
 mod test {
-    use bits::BitBlock;
-    use bits::BitVec;
+    use bits::{BitBlock, BitVec, BitSet};
 
     #[test]
     fn test_from_bool_iter() {
@@ -178,6 +241,61 @@ mod test {
         }
         for i in 0..n {
             assert_eq!(*vec.get::<u32>(i), i as u32);
+        }
+    }
+
+    #[test]
+    fn test_count_ones() {
+        let n = 10_000;
+        let frac1 = 0.25;
+
+        for _ in 0..10 {
+            let bs = BitSet::random(n, frac1).into_bitvec();
+            let a = bs.count_ones_popcnt();
+            let b = bs.count_ones_avx2();
+            println!("{} - {} = {}", a, b, a as i64 - b as i64);
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn test_and_andnot1() {
+        let n = 10_000;
+
+        let f1 = |i: usize| ((i*17+2304) % 13) > 8;
+        let f2 = |i: usize| ((i*23+2304) % 13) > 8;
+
+        let vec1 = BitVec::from_bool_iter((0..n).map(f1));
+        let vec2 = BitVec::from_bool_iter((0..n).map(f2));
+
+        let mut c_and = 0;
+        let mut c_andnot = 0;
+        for i in 0..n {
+            if f1(i) && f2(i) { c_and += 1; }
+            if f1(i) && !f2(i) { c_andnot += 1; }
+        }
+
+        assert_eq!(vec1.and(&vec2).count_ones(), c_and);
+        assert_eq!(vec1.andnot(&vec2).count_ones(), c_andnot);
+    }
+
+    #[test]
+    fn test_and_andnot2() {
+        let n = 10_000;
+        let k = 10;
+
+        for _ in 0..k {
+            let vec1 = BitSet::random(n, 0.5);
+            let vec2 = BitSet::random(n, 0.5);
+
+            let mut c_and = 0;
+            let mut c_andnot = 0;
+            for i in 0..n {
+                if vec1.get_bit(i) && vec2.get_bit(i) { c_and += 1 }
+                if vec1.get_bit(i) && !vec2.get_bit(i) { c_andnot += 1 }
+            }
+            assert_eq!(vec1.and(&vec2).count_ones(), c_and);
+            assert_eq!(vec1.andnot(&vec2).count_ones(), c_andnot);
         }
     }
 }

@@ -1,12 +1,17 @@
-use dataset::NumericalType;
+use dataset::{NumericalType, NominalType};
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SplitCrit {
     Undefined,
 
-    /// Corresponds to `FeatureData::BitSets`. Everything equal goes left, rest goes right.
-    BitSetsEq { value_index: usize }
+    /// Equality test: equal goes left, others go right.
+    EqTest(NominalType),
+
+    /// Ordinal test: less than goes left, others go right.
+    LtTest(NumericalType),
 }
+
+//impl Eq for SplitCrit {}
 
 /// Tree structure. This is the full tree, not an individual node (we don't use the recursive
 /// definition).
@@ -46,8 +51,8 @@ impl Tree {
     pub fn ninternal(&self) -> usize { (1 << self.max_depth) - 1 }
     pub fn nnodes(&self) -> usize { (1 << (self.max_depth+1)) - 1 }
     pub fn get_max_depth(&self) -> usize { self.max_depth }
-    pub fn set_root_value(&mut self, value: NumericalType) {
-        self.node_values[0] = value;
+    pub fn set_value(&mut self, node_id: usize, value: NumericalType) {
+        self.node_values[node_id] = value;
     }
     pub fn is_leaf_node(&self, node_id: usize) -> bool {
         node_id >= self.ninternal()

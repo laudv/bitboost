@@ -1,72 +1,57 @@
 //use std::fmt::{Debug, Result as FmtResult, Formatter};
-use std::ops::{Deref, DerefMut};
-
-use rand::prelude::*;
-use rand::distributions::Bernoulli;
+use std::ops::{Deref};
 
 use bits::BitVec;
 
+/// An immutable BitVec with a buffered true-count.
 pub struct BitSet {
     vec: BitVec,
-    //one_count: u64,
+    true_count: u64,
+    used_nbits: u64,
 }
 
 impl BitSet {
 
     pub fn falses(nbits: usize) -> BitSet {
         let vec = BitVec::zero_bits(nbits);
-        Self::from_bitvec(vec)
+        Self::from_bitvec(nbits, vec)
     }
 
     pub fn trues(nbits: usize) -> BitSet {
         let vec = BitVec::one_bits(nbits);
-        Self::from_bitvec(vec)
+        Self::from_bitvec(nbits, vec)
     }
 
-    pub fn from_bool_iter<I>(iter: I) -> BitSet
+    pub fn from_bool_iter<I>(nbits: usize, iter: I) -> BitSet
     where I: Iterator<Item = bool> {
         let vec = BitVec::from_bool_iter(iter);
-        Self::from_bitvec(vec)
+        Self::from_bitvec(nbits, vec)
     }
 
-    pub fn from_bitvec(vec: BitVec) -> BitSet {
+    pub fn from_bitvec(nbits: usize, vec: BitVec) -> BitSet {
+        let true_count = vec.count_ones();
         BitSet {
             vec: vec,
+            true_count: true_count,
+            used_nbits: nbits as u64,
         }
     }
 
     pub fn random(nbits: usize, frac1: f64) -> BitSet {
-        let mut rng = thread_rng();
-        let dist = Bernoulli::new(frac1);
-        BitSet::from_bool_iter(rng.sample_iter(&dist).take(nbits))
+        let bitvec = BitVec::random(nbits, frac1);
+        Self::from_bitvec(nbits, bitvec)
     }
 
-    pub fn count_ones_popcnt(&self) -> u64 {
-        let mut count = 0;
-        for i in 0..self.vec.nblocks() {
-            count += self.vec.get_block(i).count_ones() as u64;
-        }
-        count
-    }
-
-    pub fn count_ones_avx2(&self) -> u64 {
-        super::sum_simd::bitset_count_ones(&self.vec)
-    }
-
-    pub fn count_ones(&self) -> u64 {
-        self.count_ones_avx2()
-    }
+    pub fn true_count(&self) -> u64 { self.true_count }
+    pub fn false_count(&self) -> u64 { self.used_nbits - self.true_count }
+    pub fn len(&self) -> u64 { self.used_nbits }
+    pub fn into_bitvec(self) -> BitVec { self.vec }
 }
 
 impl Deref for BitSet {
     type Target = BitVec;
     fn deref(&self) -> &BitVec { &self.vec }
 }
-
-impl DerefMut for BitSet {
-    fn deref_mut(&mut self) -> &mut BitVec { &mut self.vec }
-}
-
 
 //impl Debug for BitSet {
 //    fn fmt(&self, f: &mut Formatter) -> FmtResult {
@@ -91,21 +76,8 @@ mod test {
 
     #[test]
     fn test_bitset() {
-        let bs = BitSet::from_bool_iter((0..1024).map(|i| i%7==0));
-        assert_eq!(147, bs.count_ones());
-    }
-
-    #[test]
-    fn test_bitset_count_ones() {
-        let n = 10_000;
-        let frac1 = 0.25;
-
-        for _ in 0..10 {
-            let bs = BitSet::random(n, frac1);
-            let a = bs.count_ones_popcnt();
-            let b = bs.count_ones_avx2();
-            println!("{} - {} = {}", a, b, a as i64 - b as i64);
-            assert_eq!(a, b);
-        }
+        let n = 1024;
+        let bs = BitSet::from_bool_iter(n, (0..n).map(|i| i%7==0));
+        assert_eq!(147, bs.true_count());
     }
 }

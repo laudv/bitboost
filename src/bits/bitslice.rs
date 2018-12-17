@@ -1,19 +1,33 @@
 use bits::{BitBlock, BitVec, BitSet};
 use bits::bitblock::{get_bit, set_bit, get_blockpos, get_bitpos};
-use bits::sum_simd;
+use bits::simd;
 
 static SUM_FUN_PTRS: [fn(&BitVec) -> u64; 4] = [
-    sum_simd::bitslice_sum_width1,
-    sum_simd::bitslice_sum_width2,
-    sum_simd::bitslice_sum_width2, // invalid
-    sum_simd::bitslice_sum_width4,
+    simd::bitslice_sum_width1,
+    simd::bitslice_sum_width2,
+    simd::bitslice_sum_width2, // invalid
+    simd::bitslice_sum_width4,
 ];
 
-static SUM_MASKED_FUN_PTRS: [fn(&BitVec, &BitSet) -> u64; 4] = [
-    sum_simd::bitslice_sum_masked_width1,
-    sum_simd::bitslice_sum_masked_width2,
-    sum_simd::bitslice_sum_masked_width2, // invalid
-    sum_simd::bitslice_sum_masked_width4,
+static SUM_MASKED_FUN_PTRS: [fn(&BitVec, &BitVec) -> u64; 4] = [
+    simd::bitslice_sum_masked_width1,
+    simd::bitslice_sum_masked_width2,
+    simd::bitslice_sum_masked_width2, // invalid
+    simd::bitslice_sum_masked_width4,
+];
+
+static SUM_MASKED_AND_FUN_PTRS: [fn(&BitVec, &BitVec, &BitVec) -> u64; 4] = [
+    simd::bitslice_sum_masked_and_width1,
+    simd::bitslice_sum_masked_and_width2,
+    simd::bitslice_sum_masked_and_width2, // invalid
+    simd::bitslice_sum_masked_and_width4,
+];
+
+static SUM_MASKED_ANDNOT_FUN_PTRS: [fn(&BitVec, &BitVec, &BitVec) -> u64; 4] = [
+    simd::bitslice_sum_masked_andnot_width1,
+    simd::bitslice_sum_masked_andnot_width2,
+    simd::bitslice_sum_masked_andnot_width2, // invalid
+    simd::bitslice_sum_masked_andnot_width4,
 ];
 
 pub struct BitSlice {
@@ -91,13 +105,25 @@ impl BitSlice {
         let f = unsafe { SUM_MASKED_FUN_PTRS.get_unchecked(self.width as usize - 1) };
         f(&self.vec, mask)
     }
+
+    pub fn sum_masked_and(&self, mask1: &BitSet, mask2: &BitSet) -> u64 {
+        debug_assert!(self.width == 1 || self.width == 2 || self.width == 4);
+        let f = unsafe { SUM_MASKED_AND_FUN_PTRS.get_unchecked(self.width as usize - 1) };
+        f(&self.vec, mask1, mask2)
+    }
+
+    pub fn sum_masked_andnot(&self, mask1: &BitSet, mask2: &BitSet) -> u64 {
+        debug_assert!(self.width == 1 || self.width == 2 || self.width == 4);
+        let f = unsafe { SUM_MASKED_ANDNOT_FUN_PTRS.get_unchecked(self.width as usize - 1) };
+        f(&self.vec, mask1, mask2)
+    }
 }
 
 
 
 #[cfg(test)]
 mod test {
-    use bits::{BitSlice, BitSet};
+    use bits::{BitSlice, BitVec};
 
     #[test]
     fn test_bitslice_len() {
@@ -157,7 +183,7 @@ mod test {
         let n = 10_000;
         for &width in &[1u8, 2u8, 4u8] {
             let mut bs = BitSlice::new(n, width);
-            let mut mask = BitSet::falses(n);
+            let mut mask = BitVec::zero_bits(n);
 
             assert_eq!(bs.sum(), 0);
 
@@ -171,10 +197,47 @@ mod test {
                 if b { sum1 += v as u64; }
             }
 
-            let sum2 = bs.sum_masked(&mask);
+            let sum2 = bs.sum_masked(&mask.into_bitset(n));
 
             println!("width {}: sums: {} / {}", width, sum1, sum2);
             assert_eq!(sum1, sum2);
+        }
+    }
+
+    #[test]
+    fn test_bitslice_sum_masked_and() {
+        let n = 10_000;
+        for &width in &[1u8, 2u8, 4u8] {
+            let mut bs = BitSlice::new(n, width);
+            let mut mask1 = BitVec::zero_bits(n);
+            let mut mask2 = BitVec::zero_bits(n);
+
+            assert_eq!(bs.sum(), 0);
+
+            let mut sum1: u64 = 0;
+            let mut sum2: u64 = 0;
+            for i in 0..n {
+                let b1 = ((i*17+2304) % 13) > 8;
+                let b2 = ((i*23+2304) % 13) > 8;
+                let v = ((i*7+13) % (1<<width)) as u8;
+                mask1.set_bit(i, b1);
+                mask2.set_bit(i, b2);
+                bs.set_value(i, v);
+
+                if b1 && b2 { sum1 += v as u64; }
+                if b1 && !b2 { sum2 += v as u64; }
+            }
+
+            let m1 = mask1.into_bitset(n);
+            let m2 = mask2.into_bitset(n);
+
+            let sum3 = bs.sum_masked_and(&m1, &m2);
+            let sum4 = bs.sum_masked_andnot(&m1, &m2);
+
+            println!("width {}:   test sums: {:4} / {:4}", width, sum1, sum2);
+            println!("width {}: actual sums: {:4} / {:4}", width, sum3, sum4);
+            assert_eq!(sum1, sum3);
+            assert_eq!(sum2, sum4);
         }
     }
 }

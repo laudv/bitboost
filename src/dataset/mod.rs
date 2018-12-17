@@ -6,7 +6,7 @@ use std::fs::File;
 use flate2::read::GzDecoder;
 
 use conf::{Config, Objective};
-use bits::{BitSet, BitSlice};
+use bits::{BitSet, BitVec, BitSlice};
 
 use log::info;
 
@@ -189,7 +189,7 @@ impl <'a> DataSetBuilder<'a> {
     {
         self.check_and_update_length(len)?;
 
-        let mut map: HashMap<I::Item, BitSet> = HashMap::new();
+        let mut map: HashMap<I::Item, BitVec> = HashMap::new();
         
         // Loop over feature data in `iter` and construct bitsets for each possible value
         for (i, v) in iter.enumerate() {
@@ -198,7 +198,7 @@ impl <'a> DataSetBuilder<'a> {
                     return Err(format!("low cardinality nominal feature with more than {} distinct
                                        values", self.config.max_lowcard_nominal_cardinality));
                 }
-                map.insert(v, BitSet::falses(len));
+                map.insert(v, BitVec::zero_bits(len));
             }
 
             if let Some(bs) = map.get_mut(&v) {
@@ -212,7 +212,7 @@ impl <'a> DataSetBuilder<'a> {
         
         // Construct the feature
         let mut bitset_vec: Vec<(NominalType, BitSet)> = map.into_iter()
-            .map(|p| (p.0.into(), p.1))
+            .map(|p| (p.0.into(), p.1.into_bitset(len)))
             .collect();
         bitset_vec.sort_by(|p, q| p.0.cmp(&q.0));
 

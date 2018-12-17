@@ -1,7 +1,7 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-use bits::{BitBlock, BitSet, BitVec};
+use bits::{BitBlock, BitVec};
 
 unsafe fn count_ones_u64(v: __m256i) -> __m256i {
     // -- IMPL 1 --
@@ -39,23 +39,77 @@ unsafe fn load_unmasked(v: &BitVec, i: usize) -> __m256i {
     _mm256_load_si256(v.get_unchecked(i).as_ptr() as *const __m256i)
 }
 
-unsafe fn load_masked1(v: (&BitVec, &BitSet), i: usize) -> __m256i {
+unsafe fn load_masked1(v: (&BitVec, &BitVec), i: usize) -> __m256i {
     let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
     let mask = _mm256_load_si256(v.1.get_unchecked(i).as_ptr() as *const __m256i);
     _mm256_and_si256(block, mask)
 }
 
-unsafe fn load_masked2(v: (&BitVec, &BitSet), i: usize) -> __m256i {
+unsafe fn load_masked1_not(v: (&BitVec, &BitVec), i: usize) -> __m256i {
+    let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
+    let mask = _mm256_load_si256(v.1.get_unchecked(i).as_ptr() as *const __m256i);
+    _mm256_andnot_si256(mask, block)
+}
+
+unsafe fn load_masked2(v: (&BitVec, &BitVec), i: usize) -> __m256i {
     let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
     let mask128 = _mm_load_si128((v.1.as_ptr() as *const __m128i).add(i));
     let mask = _mm256_permute4x64_epi64(_mm256_broadcastsi128_si256(mask128), 0b01011010);
     _mm256_and_si256(block, mask)
 }
 
-unsafe fn load_masked4(v: (&BitVec, &BitSet), i: usize) -> __m256i {
+unsafe fn load_masked4(v: (&BitVec, &BitVec), i: usize) -> __m256i {
     let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
     let mask64 = *(v.1.as_ptr() as *const i64).add(i);
     let mask = _mm256_set1_epi64x(mask64);
+    _mm256_and_si256(block, mask)
+}
+
+unsafe fn load_masked_and1(v: (&BitVec, &BitVec, &BitVec), i: usize) -> __m256i {
+    let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
+    let mask1 = _mm256_load_si256(v.1.get_unchecked(i).as_ptr() as *const __m256i);
+    let mask2 = _mm256_load_si256(v.2.get_unchecked(i).as_ptr() as *const __m256i);
+    _mm256_and_si256(block, _mm256_and_si256(mask1, mask2))
+}
+
+unsafe fn load_masked_and2(v: (&BitVec, &BitVec, &BitVec), i: usize) -> __m256i {
+    let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
+    let mask128_1 = _mm_load_si128((v.1.as_ptr() as *const __m128i).add(i));
+    let mask128_2 = _mm_load_si128((v.2.as_ptr() as *const __m128i).add(i));
+    let mask128 = _mm_and_si128(mask128_1, mask128_2);
+    let mask = _mm256_permute4x64_epi64(_mm256_broadcastsi128_si256(mask128), 0b01011010);
+    _mm256_and_si256(block, mask)
+}
+
+unsafe fn load_masked_and4(v: (&BitVec, &BitVec, &BitVec), i: usize) -> __m256i {
+    let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
+    let mask64_1 = *(v.1.as_ptr() as *const i64).add(i);
+    let mask64_2 = *(v.2.as_ptr() as *const i64).add(i);
+    let mask = _mm256_set1_epi64x(mask64_1 & mask64_2);
+    _mm256_and_si256(block, mask)
+}
+
+unsafe fn load_masked_andnot1(v: (&BitVec, &BitVec, &BitVec), i: usize) -> __m256i {
+    let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
+    let mask1 = _mm256_load_si256(v.1.get_unchecked(i).as_ptr() as *const __m256i);
+    let mask2 = _mm256_load_si256(v.2.get_unchecked(i).as_ptr() as *const __m256i);
+    _mm256_and_si256(block, _mm256_andnot_si256(mask2, mask1))
+}
+
+unsafe fn load_masked_andnot2(v: (&BitVec, &BitVec, &BitVec), i: usize) -> __m256i {
+    let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
+    let mask128_1 = _mm_load_si128((v.1.as_ptr() as *const __m128i).add(i));
+    let mask128_2 = _mm_load_si128((v.2.as_ptr() as *const __m128i).add(i));
+    let mask128 = _mm_andnot_si128(mask128_2, mask128_1);
+    let mask = _mm256_permute4x64_epi64(_mm256_broadcastsi128_si256(mask128), 0b01011010);
+    _mm256_and_si256(block, mask)
+}
+
+unsafe fn load_masked_andnot4(v: (&BitVec, &BitVec, &BitVec), i: usize) -> __m256i {
+    let block = _mm256_load_si256(v.0.get_unchecked(i).as_ptr() as *const __m256i);
+    let mask64_1 = *(v.1.as_ptr() as *const i64).add(i);
+    let mask64_2 = *(v.2.as_ptr() as *const i64).add(i);
+    let mask = _mm256_set1_epi64x(mask64_1 & !mask64_2);
     _mm256_and_si256(block, mask)
 }
 
@@ -150,8 +204,16 @@ macro_rules! harvey_seal_avx2 {
 
 // - Access functions -------------------------------------------------------------------------- //
 
-pub fn bitset_count_ones(blocks: &BitVec) -> u64 {
+pub fn bitvec_count_ones(blocks: &BitVec) -> u64 {
     unsafe { harvey_seal_avx2!(blocks, blocks.len(), load_unmasked, reduce1) }
+}
+
+pub fn bitvec_count_and(v: &BitVec, w: &BitVec) -> u64 {
+    unsafe { harvey_seal_avx2!((v, w), v.len(), load_masked1, reduce1) }
+}
+
+pub fn bitvec_count_andnot(v: &BitVec, w: &BitVec) -> u64 {
+    unsafe { harvey_seal_avx2!((v, w), v.len(), load_masked1_not, reduce1) }
 }
 
 pub fn bitslice_sum_width1(blocks: &BitVec) -> u64 {
@@ -166,14 +228,79 @@ pub fn bitslice_sum_width4(blocks: &BitVec) -> u64 {
     unsafe { harvey_seal_avx2!(blocks, blocks.len(), load_unmasked, reduce4_pow2) }
 }
 
-pub fn bitslice_sum_masked_width1(blocks: &BitVec, mask: &BitSet) -> u64 {
+pub fn bitslice_sum_masked_width1(blocks: &BitVec, mask: &BitVec) -> u64 {
     unsafe { harvey_seal_avx2!((blocks, mask), blocks.len(), load_masked1, reduce1) }
 }
 
-pub fn bitslice_sum_masked_width2(blocks: &BitVec, mask: &BitSet) -> u64 {
+pub fn bitslice_sum_masked_width2(blocks: &BitVec, mask: &BitVec) -> u64 {
     unsafe { harvey_seal_avx2!((blocks, mask), blocks.len(), load_masked2, reduce2_pow2) }
 }
 
-pub fn bitslice_sum_masked_width4(blocks: &BitVec, mask: &BitSet) -> u64 {
+pub fn bitslice_sum_masked_width4(blocks: &BitVec, mask: &BitVec) -> u64 {
     unsafe { harvey_seal_avx2!((blocks, mask), blocks.len(), load_masked4, reduce4_pow2) }
+}
+
+pub fn bitslice_sum_masked_and_width1(blocks: &BitVec, m1: &BitVec, m2: &BitVec) -> u64 {
+    unsafe { harvey_seal_avx2!((blocks, m1, m2), blocks.len(), load_masked_and1, reduce1) }
+}
+
+pub fn bitslice_sum_masked_and_width2(blocks: &BitVec, m1: &BitVec, m2: &BitVec) -> u64 {
+    unsafe { harvey_seal_avx2!((blocks, m1, m2), blocks.len(), load_masked_and2, reduce2_pow2) }
+}
+
+pub fn bitslice_sum_masked_and_width4(blocks: &BitVec, m1: &BitVec, m2: &BitVec) -> u64 {
+    unsafe { harvey_seal_avx2!((blocks, m1, m2), blocks.len(), load_masked_and4, reduce4_pow2) }
+}
+
+pub fn bitslice_sum_masked_andnot_width1(blocks: &BitVec, m1: &BitVec, m2: &BitVec) -> u64 {
+    unsafe { harvey_seal_avx2!((blocks, m1, m2), blocks.len(), load_masked_andnot1, reduce1) }
+}
+
+pub fn bitslice_sum_masked_andnot_width2(blocks: &BitVec, m1: &BitVec, m2: &BitVec) -> u64 {
+    unsafe { harvey_seal_avx2!((blocks, m1, m2), blocks.len(), load_masked_andnot2, reduce2_pow2) }
+}
+
+pub fn bitslice_sum_masked_andnot_width4(blocks: &BitVec, m1: &BitVec, m2: &BitVec) -> u64 {
+    unsafe { harvey_seal_avx2!((blocks, m1, m2), blocks.len(), load_masked_andnot4, reduce4_pow2) }
+}
+
+
+
+
+
+
+
+
+
+// - Logical ----------------------------------------------------------------------------------- //
+
+macro_rules! logic_combine {
+    ($combiner:ident, $arg1:expr, $arg2:expr) => {{
+        let v = $arg1;
+        let w = $arg2;
+        let nblocks = usize::min(v.nblocks(), w.nblocks());
+        let mut vec: Vec<BitBlock> = Vec::with_capacity(nblocks);
+
+        unsafe { vec.set_len(nblocks); }
+
+        let vp = v.as_ptr() as *const __m256i;
+        let wp = w.as_ptr() as *const __m256i;
+        let vec_ptr = vec.as_mut_ptr() as *mut __m256i;
+
+        for i in 0..nblocks {
+            unsafe { 
+                let x = $combiner(*vp.add(i), *wp.add(i));
+                _mm256_store_si256(vec_ptr.add(i), x);
+            }
+        }
+        vec
+    }}
+}
+
+pub fn and(v: &BitVec, w: &BitVec) -> Vec<BitBlock> {
+    logic_combine!(_mm256_and_si256, v, w)
+}
+
+pub fn andnot(v: &BitVec, w: &BitVec) -> Vec<BitBlock> {
+    logic_combine!(_mm256_andnot_si256, w, v)
 }

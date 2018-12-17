@@ -12,13 +12,15 @@ pub enum Objective {
 pub struct Config {
     pub objective: Objective,
     pub max_lowcard_nominal_cardinality: usize,
-    pub pseudo_residual_nbits: u8,
     pub max_tree_depth: usize,
     pub lowcard_nominal_features: Vec<usize>,
     pub ignored_features: Vec<usize>,
     pub target_feature: usize,
 
+    pub target_values_nbits: u8,
     pub target_values_limits: (NumericalType, NumericalType),
+
+    pub reg_lambda: NumericalType,
 
     //#[serde(flatten)]
     //extra: HashMap<String, Value>,
@@ -28,13 +30,16 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             objective: Objective::Regression,
-            max_lowcard_nominal_cardinality: 16,
-            pseudo_residual_nbits: 4,
+            max_lowcard_nominal_cardinality: 64,
             max_tree_depth: 5,
             lowcard_nominal_features: Vec::new(),
             ignored_features: Vec::new(),
             target_feature: 0,
+
+            target_values_nbits: 4,
             target_values_limits: (-1.0, 1.0),
+
+            reg_lambda: 1.0,
         }
     }
 }

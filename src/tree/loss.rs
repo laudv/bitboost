@@ -23,7 +23,7 @@ pub trait LossFunHess: LossFunGrad {
 /// derivative and we simply take the mean of the gradients by having 'hessian = 1.0'.
 pub trait LossFunHessConst: LossFunGrad {
     /// Constant second derivative
-    fn eval_hess(&self, target_value: NumT, predicted_value: NumT) -> NumT;
+    fn get_const_hess(&self) -> NumT;
 }
 
 
@@ -51,8 +51,11 @@ macro_rules! impl_hess {
         }
     };
     ($name:ident : const $hess:expr) => {
-        impl LossFunHessConst for $name {
+        impl LossFunHess for $name {
             fn eval_hess(&self, _: NumT, _: NumT) -> NumT { $hess }
+        }
+        impl LossFunHessConst for $name {
+            fn get_const_hess(&self) -> NumT { $hess }
         }
     }
 }
@@ -61,16 +64,19 @@ macro_rules! impl_hess {
 
 
 pub struct L2Loss;
+impl L2Loss { pub fn new() -> L2Loss { L2Loss { } } }
 impl_eval!(L2Loss: |_, t, p| { let d = t-p; 0.5 * d * d });
-impl_grad!(L2Loss: |_, t, p| { t-p });
+impl_grad!(L2Loss: |_, t, p| { p-t });
 impl_hess!(L2Loss: const 1.0);
 
 pub struct L1Loss;
-impl_eval!(L1Loss: |_, t, p| { NumT::abs(t-p) });
-impl_grad!(L1Loss: |_, t, p| { NumT::signum(t-p) });
+impl L1Loss { pub fn new() -> L1Loss { L1Loss { } } }
+impl_eval!(L1Loss: |_, t, p| { NumT::abs(p-t) });
+impl_grad!(L1Loss: |_, t, p| { NumT::signum(p-t) });
 impl_hess!(L1Loss: const 1.0);
 
 pub struct HuberLoss { delta: NumT }
+impl HuberLoss { pub fn new(d: NumT) -> HuberLoss { HuberLoss { delta: d } } }
 impl_eval!(HuberLoss: |s: &HuberLoss, t: NumT, p: NumT| {
     let d = t-p;
     if d.abs() < s.delta { 0.5 * d * d }
