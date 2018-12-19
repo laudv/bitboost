@@ -23,6 +23,34 @@ def gen_lowcard_nom_dataset1(n, seed):
     frame = pandas.DataFrame(data=data)
     return frame
 
+def gen_lowcard_nom_dataset2(n, nattr, seed):
+    np.random.seed(seed)
+
+    # generate columns
+    columns = []
+    for i in range(0, nattr):
+        card = np.random.randint(2, 16)
+        columns.append(np.random.randint(0, card, n))
+
+    output = np.zeros(n)
+    for i in np.random.permutation(range(0, n)):
+        if output[i] != 0.0:
+            if np.random.rand() > 0.05: continue
+        col = np.random.randint(0, nattr)
+        val = columns[col][i]
+        outval = np.random.rand();
+        output[columns[col] == val] = outval
+    output += 0.01 * np.random.randn(n)
+    output = output.round(3)
+
+    data = {}
+    for (i, col) in enumerate(columns):
+        data["col{}".format(i)] = col
+    data["output"] = output
+
+    frame = pandas.DataFrame(data = data)
+    return frame
+
 def gen_simple_lowcard_nom_dataset(n, seed):
     np.random.seed(seed)
     data = {
@@ -44,20 +72,22 @@ def gen_simple_lowcard_nom_dataset(n, seed):
 
 if __name__ == "__main__":
     seed = 91
-    n = 1000000
-    gen_testset = False
+    n = 50000
+    attr = 16
+    compression = False
+    test_frac = 0.0
 
-    filename = "/tmp/data{}.csv.gz".format(n)
-    frame = gen_lowcard_nom_dataset1(n, seed)
-    #frame = gen_simple_lowcard_nom_dataset(n, seed)
+    for attr in [4, 8, 16, 32, 64, 128, 256]:
+        compr_opt = "gzip" if compression else None
+        compr_ext = ".gz" if compression else ""
 
-    print(filename)
-    frame.to_csv(filename, header=True, index=False, compression="gzip")
+        ftrain = "/tmp/train{:03}-{}.csv{}".format(attr, n, compr_ext)
+        ftest = "/tmp/test{:03}-{}.csv{}".format(attr, n, compr_ext)
+        frame = gen_lowcard_nom_dataset2(int(n * (1.0+test_frac)), attr, seed)
 
-    # test set
-    if gen_testset:
-        ntest = int(n / 10)
-        filename = "/tmp/data_test{}.csv.gz".format(ntest)
-        frame = gen_simple_lowcard_nom_dataset(ntest, seed*3 + 13)
-        print(filename)
-        frame.to_csv(filename, header=True, index=False, compression="gzip")
+        print(ftrain)
+        frame[0:n].to_csv(ftrain, header=True, index=False, compression=compr_opt)
+
+        if test_frac > 0.0:
+            print(ftest)
+            frame[n:].to_csv(ftest, header=True, index=False, compression=compr_opt)

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::io::{Read};
+use std::io::{Read, BufReader};
 use std::fs::File;
+use std::time::Instant;
 
 use flate2::read::GzDecoder;
 
@@ -90,12 +91,14 @@ impl <'a> DataSetBuilder<'a> {
 
     pub fn from_gzip_csv_file(config: &'a Config, filename: &str) -> Result<DataSet, String> {
         info!("Reading gzipped CSV data file {}", filename);
-        Self::from_gzip_csv(config, try_or_str!(File::open(filename), "cannot open CSV.GZ file"))
+        let reader = BufReader::new(try_or_str!(File::open(filename), "cannot open CSV.GZ file"));
+        Self::from_gzip_csv(config, reader)
     }
 
     pub fn from_csv_file(config: &'a Config, filename: &str) -> Result<DataSet, String> {
         info!("Reading CSV data file {}", filename);
-        Self::from_csv(config, try_or_str!(File::open(filename), "cannnot open CSV file"))
+        let reader = BufReader::new(try_or_str!(File::open(filename), "cannot open CSV file"));
+        Self::from_csv(config, reader)
     }
 
     pub fn from_gzip_csv<R>(config: &'a Config, gz_reader: R) -> Result<DataSet, String>
@@ -108,7 +111,13 @@ impl <'a> DataSetBuilder<'a> {
         let mut rdr = csv::Reader::from_reader(csv_reader);
 
         // Read CSV file and cache in vecs
+        let start = Instant::now();
         let columns = Self::buffer_records_as_columns(&mut rdr)?;
+        let elapsed = start.elapsed();
+        println!("dataset buffered in {}", (elapsed.as_secs() as f64 * 1e6 +
+                                            elapsed.subsec_micros() as f64) / 1e6);
+
+        let start = Instant::now();
 
         // Construct feature columns
         let mut builder = DataSetBuilder::new(config);
@@ -135,6 +144,9 @@ impl <'a> DataSetBuilder<'a> {
             }
         }
 
+        let elapsed = start.elapsed();
+        println!("CSV dataset parsed in {}s", (elapsed.as_secs() as f64 * 1e6 +
+                                          elapsed.subsec_micros() as f64) / 1e6);
         builder.into_dataset()
     }
 
