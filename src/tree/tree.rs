@@ -1,17 +1,18 @@
-use dataset::{NumericalType, NominalType};
+use tree::loss::LossFun;
+
+use dataset::DataSet;
+use dataset::{NumT, NomT};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SplitCrit {
     Undefined,
 
     /// Equality test: equal goes left, others go right.
-    EqTest(NominalType),
+    EqTest(usize, NomT),
 
     /// Ordinal test: less than goes left, others go right.
-    LtTest(NumericalType),
+    LtTest(usize, NumT),
 }
-
-//impl Eq for SplitCrit {}
 
 /// Tree structure. This is the full tree, not an individual node (we don't use the recursive
 /// definition).
@@ -22,7 +23,7 @@ pub enum SplitCrit {
 pub struct Tree {
     max_depth: usize,
     split_crits: Vec<SplitCrit>,
-    node_values: Vec<NumericalType>,
+    node_values: Vec<NumT>,
 }
 
 impl Tree {
@@ -51,16 +52,17 @@ impl Tree {
     pub fn ninternal(&self) -> usize { (1 << self.max_depth) - 1 }
     pub fn nnodes(&self) -> usize { (1 << (self.max_depth+1)) - 1 }
     pub fn get_max_depth(&self) -> usize { self.max_depth }
-    pub fn set_value(&mut self, node_id: usize, value: NumericalType) {
+    pub fn set_value(&mut self, node_id: usize, value: NumT) {
         self.node_values[node_id] = value;
     }
     pub fn is_leaf_node(&self, node_id: usize) -> bool {
         node_id >= self.ninternal()
     }
 
-    pub fn split_node(&mut self, node_id: usize, split_crit: SplitCrit, left_value: NumericalType,
-                      right_value: NumericalType) {
-        debug_assert!(self.split_crits[node_id] == SplitCrit::Undefined);
+    pub fn split_node(&mut self, node_id: usize, split_crit: SplitCrit, left_value: NumT,
+                      right_value: NumT) {
+        println!("splitting {}", node_id);
+        debug_assert_eq!(self.split_crits[node_id], SplitCrit::Undefined);
 
         let left_id = self.left_child(node_id);
         let right_id = self.right_child(node_id);
@@ -68,6 +70,41 @@ impl Tree {
         self.split_crits[node_id] = split_crit;
         self.node_values[left_id] = left_value;
         self.node_values[right_id] = right_value;
+    }
+
+    pub fn predict(&self, dataset: &DataSet) -> Vec<NumT> {
+        let mut predictions = Vec::new();
+        for i in 0..dataset.nexamples() {
+            let mut node_id = 0;
+            loop {
+                let split_crit = &self.split_crits[node_id];
+                match split_crit {
+                    &SplitCrit::LtTest(_, _) => unimplemented!(),
+                    &SplitCrit::Undefined => {
+                        predictions.push(self.node_values[node_id]);
+                        break;
+                    },
+                    &SplitCrit::EqTest(feat_id, split_val) => {
+                        let value = dataset.get_value(feat_id, i);
+                        node_id = if value == split_val as NumT {
+                            self.left_child(node_id)
+                        } else {
+                            self.right_child(node_id)
+                        }
+                    }
+                }
+            }
+        }
+        predictions
+    }
+
+    pub fn evaluate<M>(&self, dataset: &DataSet) -> NumT
+    where M: LossFun {
+        //let predictions = self.predict(dataset);
+        //let target = self.get_target_feature().get_data()
+        //for i in dataset.get_target_feature
+        //
+        unimplemented!()
     }
 }
 

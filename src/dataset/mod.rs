@@ -11,18 +11,18 @@ use bits::{BitSet, BitVec, BitSlice};
 
 use log::info;
 
-pub type NominalType = i64;
-pub type NumericalType = f32;
+pub type NomT = u32; // nominal type
+pub type NumT = f32; // numerical type
 
 pub enum FeatureData {
     /// Low cardinal nominal data: bit sets for one-hot encoding. Store a bitset for each value.
-    BitSets(Vec<(NominalType, BitSet)>),
+    BitSets(Vec<(NomT, BitSet)>),
 
     /// Low precision ordinal feature (up to 4 bits per feature value).
     BitSlice(BitSlice),
 
     /// Plain numerical feature (e.g. regression target feature).
-    Numerical(Vec<NumericalType>),
+    Numerical(Vec<NumT>),
 }
 
 pub struct Feature {
@@ -44,12 +44,6 @@ pub struct DataSet {
     target_feature: Feature,
 }
 
-#[derive(Clone, Copy)]
-enum DataElem {
-    Float(NumericalType),
-    Int(NominalType),
-}
-
 
 
 
@@ -68,6 +62,23 @@ impl Feature {
             FeatureData::BitSets(ref tuples) => tuples.iter().next().map(|t| t.1.nbits()).unwrap(),
             FeatureData::BitSlice(ref bitslice) => bitslice.nbits(),
             FeatureData::Numerical(ref vec) => vec.len(),
+        }
+    }
+
+    pub fn get_value(&self, index: usize) -> NumT {
+        match self.data {
+            FeatureData::BitSets(ref tuples) => {
+                tuples.iter()
+                    .filter(|(v, bs)| bs.get_bit(index))
+                    .map(|(v, _)| *v as NumT)
+                    .next().unwrap()
+            },
+            FeatureData::BitSlice(ref slice) => {
+                slice.get_value(index) as NumT
+            },
+            FeatureData::Numerical(ref vec) => {
+                vec[index]
+            }
         }
     }
 }
@@ -113,7 +124,13 @@ impl <'a> DataSetBuilder<'a> {
         // Read CSV file and cache in vecs
         let start = Instant::now();
         let columns = Self::buffer_records_as_columns(&mut rdr)?;
+        let ncolumns = columns.len();
         let elapsed = start.elapsed();
+        let target_i = if config.target_feature >= 0 { config.target_feature as usize }
+                       else { ncolumns - ((-config.target_feature) as usize) };
+
+        info!("Target feature id is {}", target_i);
+
         println!("dataset buffered in {}", (elapsed.as_secs() as f64 * 1e6 +
                                             elapsed.subsec_micros() as f64) / 1e6);
 
@@ -122,22 +139,21 @@ impl <'a> DataSetBuilder<'a> {
         // Construct feature columns
         let mut builder = DataSetBuilder::new(config);
         for (i, mut column) in columns.into_iter().enumerate() {
-            if builder.config.target_feature == i {
+            if target_i == i {
                 match builder.config.objective {
                     Objective::Regression => {
-                        let feature = column.into_iter().map(|e| e.into_float());
-                        builder.add_regression_target(feature)?;
+                        builder.add_regression_target(column.into_iter())?;
                     },
                     Objective::Classification => {
                         let len = column.len();
-                        let feature = column.into_iter().map(|e| e.into_int() == 1);
-                        builder.add_classification_target(len, feature)?;
+                        let target = column.into_iter().map(|e| e == 1.0);
+                        builder.add_classification_target(len, target)?;
                     }
                 }
             } else if builder.config.ignored_features.contains(&i) {
             } else if builder.config.lowcard_nominal_features.contains(&i) {
                 let len = column.len();
-                let feature = column.into_iter().map(|e| e.into_int());
+                let feature = column.into_iter().map(|e| e.round() as NomT);
                 builder.add_lowcard_nominal_feature(len, feature)?;
             } else {
                 unimplemented!();
@@ -146,13 +162,13 @@ impl <'a> DataSetBuilder<'a> {
 
         let elapsed = start.elapsed();
         println!("CSV dataset parsed in {}s", (elapsed.as_secs() as f64 * 1e6 +
-                                          elapsed.subsec_micros() as f64) / 1e6);
+                                               elapsed.subsec_micros() as f64) / 1e6);
         builder.into_dataset()
     }
 
-    fn buffer_records_as_columns<R>(rdr: &mut csv::Reader<R>) -> Result<Vec<Vec<DataElem>>, String>
+    fn buffer_records_as_columns<R>(rdr: &mut csv::Reader<R>) -> Result<Vec<Vec<NumT>>, String>
     where R: Read {
-        let mut columns: Vec<Vec<DataElem>> = Vec::new();
+        let mut columns: Vec<Vec<NumT>> = Vec::new();
         for result in rdr.records() {
             let record = try_or_str!(result, "error parsing CSV record");
             if columns.len() == 0 {
@@ -160,7 +176,7 @@ impl <'a> DataSetBuilder<'a> {
             }
 
             for (i, v) in record.iter().enumerate() {
-                columns[i].push(DataElem::parse(v)?);
+                columns[i].push(try_or_str!(v.parse::<NumT>(), "float parse error"));
             }
         }
         Ok(columns)
@@ -197,7 +213,7 @@ impl <'a> DataSetBuilder<'a> {
 
     fn new_lowcard_nominal_feature<I>(&mut self, len: usize, iter: I) -> Result<Feature, String>
     where I: Iterator,
-          I::Item: Copy + Eq + Hash + Into<NominalType>
+          I::Item: Copy + Eq + Hash + Into<NomT>
     {
         self.check_and_update_length(len)?;
 
@@ -223,7 +239,7 @@ impl <'a> DataSetBuilder<'a> {
         if map.is_empty() { return Err(String::from("lowcard feature empty")); }
         
         // Construct the feature
-        let mut bitset_vec: Vec<(NominalType, BitSet)> = map.into_iter()
+        let mut bitset_vec: Vec<(NomT, BitSet)> = map.into_iter()
             .map(|p| (p.0.into(), p.1.into_bitset(len)))
             .collect();
         bitset_vec.sort_by(|p, q| p.0.cmp(&q.0));
@@ -238,8 +254,8 @@ impl <'a> DataSetBuilder<'a> {
     }
 
     fn new_numerical_feature<I>(&mut self, iter: I) -> Result<Feature, String>
-    where I: Iterator<Item = NumericalType> {
-        let values = iter.collect::<Vec<NumericalType>>();
+    where I: Iterator<Item = NumT> {
+        let values = iter.collect::<Vec<NumT>>();
         self.check_and_update_length(values.len())?;
         let feature = Feature {
             id: 0,
@@ -252,7 +268,7 @@ impl <'a> DataSetBuilder<'a> {
     /// Add a new low cardinality nominal feature. The feature id is returned.
     pub fn add_lowcard_nominal_feature<I>(&mut self, len: usize, iter: I) -> Result<usize, String>
     where I: Iterator,
-          I::Item: Copy + Eq + Hash + Into<NominalType>
+          I::Item: Copy + Eq + Hash + Into<NomT>
     {
         let mut feature = self.new_lowcard_nominal_feature(len, iter)?;
         let id = self.input_features.len();
@@ -263,7 +279,7 @@ impl <'a> DataSetBuilder<'a> {
     }
 
     pub fn add_regression_target<I>(&mut self, iter: I) -> Result<(), String>
-    where I: Iterator<Item = NumericalType> {
+    where I: Iterator<Item = NumT> {
         let feature = self.new_numerical_feature(iter)?;
         self.target_feature = Some(feature);
         info!("Added regression target feature");
@@ -276,32 +292,6 @@ impl <'a> DataSetBuilder<'a> {
         self.target_feature = Some(feature);
         info!("Added classification target feature");
         Ok(())
-    }
-}
-
-impl DataElem {
-    pub fn parse(s: &str) -> Result<DataElem, String> {
-        if let Ok(i) = s.parse::<NominalType>() {
-            return Ok(DataElem::Int(i));
-        } 
-        if let Ok(f) = s.parse::<NumericalType>() {
-            return Ok(DataElem::Float(f));
-        }
-        return Err("cannot parse to int/float".to_owned());
-    }
-
-    pub fn into_int(self) -> NominalType {
-        match self {
-            DataElem::Float(f) => f.round() as NominalType,
-            DataElem::Int(i) => i
-        }
-    }
-
-    pub fn into_float(self) -> NumericalType {
-        match self {
-            DataElem::Float(f) => f,
-            DataElem::Int(i) => i as NumericalType
-        }
     }
 }
 
@@ -324,6 +314,10 @@ impl DataSet {
 
     pub fn get_target_feature(&self) -> &Feature {
         &self.target_feature
+    }
+
+    pub fn get_value(&self, feat_id: usize, index: usize) -> NumT {
+        self.get_feature(feat_id).get_value(index)
     }
 }
 

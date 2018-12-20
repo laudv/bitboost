@@ -1,6 +1,6 @@
 use std::default::Default;
 
-use dataset::NumericalType;
+use dataset::NumT;
 
 #[derive(PartialEq, Eq)]
 pub enum Objective {
@@ -15,12 +15,14 @@ pub struct Config {
     pub max_tree_depth: usize,
     pub lowcard_nominal_features: Vec<usize>,
     pub ignored_features: Vec<usize>,
-    pub target_feature: usize,
+    pub target_feature: isize,
 
     pub target_values_nbits: u8,
-    pub target_values_limits: (NumericalType, NumericalType),
+    pub target_values_limits: (NumT, NumT),
 
-    pub reg_lambda: NumericalType,
+    pub reg_lambda: NumT,
+
+    pub min_nleaves: u64,
 
     //#[serde(flatten)]
     //extra: HashMap<String, Value>,
@@ -40,6 +42,8 @@ impl Default for Config {
             target_values_limits: (-1.0, 1.0),
 
             reg_lambda: 1.0,
+
+            min_nleaves: 128,
         }
     }
 }

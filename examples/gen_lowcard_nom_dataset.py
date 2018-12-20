@@ -72,22 +72,22 @@ def gen_simple_lowcard_nom_dataset(n, seed):
 
 if __name__ == "__main__":
     seed = 91
-    n = 50000
-    attr = 16
+    n = 1000000
+    attr = 4
     compression = False
     test_frac = 0.0
 
-    for attr in [4, 8, 16, 32, 64, 128, 256]:
-        compr_opt = "gzip" if compression else None
-        compr_ext = ".gz" if compression else ""
+    #for attr in [4, 8, 16, 32, 64, 128, 256]:
+    compr_opt = "gzip" if compression else None
+    compr_ext = ".gz" if compression else ""
 
-        ftrain = "/tmp/train{:03}-{}.csv{}".format(attr, n, compr_ext)
-        ftest = "/tmp/test{:03}-{}.csv{}".format(attr, n, compr_ext)
-        frame = gen_lowcard_nom_dataset2(int(n * (1.0+test_frac)), attr, seed)
+    ftrain = "/tmp/train{:03}-{}.csv{}".format(attr, n, compr_ext)
+    ftest = "/tmp/test{:03}-{}.csv{}".format(attr, n, compr_ext)
+    frame = gen_lowcard_nom_dataset2(int(n * (1.0+test_frac)), attr, seed)
 
-        print(ftrain)
-        frame[0:n].to_csv(ftrain, header=True, index=False, compression=compr_opt)
+    print(ftrain)
+    frame[0:n].to_csv(ftrain, header=True, index=False, compression=compr_opt)
 
-        if test_frac > 0.0:
-            print(ftest)
-            frame[n:].to_csv(ftest, header=True, index=False, compression=compr_opt)
+    if test_frac > 0.0:
+        print(ftest)
+        frame[n:].to_csv(ftest, header=True, index=False, compression=compr_opt)

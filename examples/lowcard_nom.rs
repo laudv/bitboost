@@ -1,9 +1,13 @@
 extern crate spdyboost;
 extern crate pretty_env_logger;
 extern crate log;
+extern crate cpuprofiler;
 
-use std::time::Instant;
-use std::io;
+use std::time::{Instant, Duration};
+use std::env;
+use std::thread::sleep;
+
+//use cpuprofiler::PROFILER;
 
 use spdyboost::dataset::{DataSetBuilder, FeatureData};
 use spdyboost::conf::Config;
@@ -15,13 +19,16 @@ pub fn main() -> Result<(), String> {
     pretty_env_logger::init();
 
     let mut conf = Config::default();
-    conf.lowcard_nominal_features = (0..4).collect();
-    conf.target_feature = 4;
-    conf.max_tree_depth = 4;
-    conf.target_values_nbits = 1;
+    conf.lowcard_nominal_features = (0..257).collect();
+    conf.target_feature = -1;
+    conf.target_values_limits = (-1.0, 0.0);
+    conf.target_values_nbits = 4;
+    conf.reg_lambda = 0.0;
 
-    let dataset = DataSetBuilder::from_csv_file(&conf, "/tmp/data1000000.csv")?;
-    //let dataset = DataSetBuilder::from_gzip_csv_file(&conf, "/tmp/data1000.csv.gz")?;
+    let args: Vec<String> = env::args().collect();
+    let filename = &args[1];
+
+    let dataset = DataSetBuilder::from_csv_file(&conf, filename)?;
     let nexamples = dataset.nexamples();
 
     let prev_predictions = (0..nexamples).map(|_| 0.0);
@@ -29,35 +36,37 @@ pub fn main() -> Result<(), String> {
         vec.iter().cloned()
     } else { panic!() };
 
-    loop {
-        println!("max_tree_depth=");
-        let mut input_text = String::new();
-        if io::stdin().read_line(&mut input_text).is_err() { break; }
+    //sleep(Duration::from_secs(2));
 
-        let max_tree_depth = if let Ok(max_tree_depth) = input_text.trim().parse::<usize>() {
-            max_tree_depth
-        } else { println!("invalid input"); break };
+    //PROFILER.lock().unwrap().start("/tmp/file.prof").unwrap();
 
-        conf.max_tree_depth = max_tree_depth;
-
-        let r = 10;
-        let nleaves = 1 << conf.max_tree_depth;
+    //let repeat = 20;
+    //for depth in [2, 3, 4, 5, 6].iter().cloned() {
+    let repeat = 1;
+    for depth in [6].iter().cloned() {
+        conf.max_tree_depth = depth;
+        let nleaves = 1 << depth;
 
         let eval = FirstOrderSplitEvaluator::new(&conf, loss::L2Loss::new());
         let mut learner = TreeLearner::new(&conf, &dataset, &eval,
                                            target_values.clone(), prev_predictions.clone());
 
-        let start = Instant::now();
+        let mut time = 0.0;
+        for _ in 0..repeat {
+            learner.reset();
 
-        for _ in 0..r {
+            let start = Instant::now();
             learner.train();
+            let elapsed = start.elapsed();
+            time += elapsed.as_secs() as f32 * 1e3 + elapsed.subsec_micros() as f32 * 1e-3;
         }
+        time /= repeat as f32;
 
-        let (s, ms) = (start.elapsed().as_secs(), start.elapsed().subsec_micros() as f32 * 1e-3);
-        let time = (s as f32 * 1e3 + ms) / r as f32;
-
-        println!("trained in {}ms ({} leaves)", time, nleaves);
+        println!("[spdyboost: {}, nleaves={:02}, nbits={}] {}", filename, nleaves,
+                 conf.target_values_nbits, time);
     }
+
+    //PROFILER.lock().unwrap().stop().unwrap();
 
     Ok(())
 }

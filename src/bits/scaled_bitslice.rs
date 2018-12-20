@@ -143,6 +143,26 @@ mod test {
     }
 
     #[test]
+    fn test_scaled_bitslice2() {
+        //              2    3     2     3    1    1      0     3
+        let v = vec![0.25, 0.5, 0.25, 0.75, 0.0, 0.0, -0.25, 0.75];
+        let v_capped = v.iter().map(|&x| f32::max(0.0, x)).collect::<Vec<f32>>();
+        let sum_actual = v_capped.iter().sum();
+        let target_values = ScaledBitSlice::<f32>::new(v.len(), 2, v.iter().cloned(), 0.0, 0.75);
+        let sum = target_values.sum();
+
+        for (i, &x) in v_capped.iter().enumerate() {
+            assert_eq!(target_values.get_value(i), x);
+        }
+        assert_eq!(sum, sum_actual);
+
+        let mask = BitSet::from_bool_iter(v.len(), vec![1,1,0,0,0,0,1,1].into_iter().map(|x| x==1));
+        assert_eq!(target_values.sum_masked(&mask), 1.5);
+        let mask = BitSet::from_bool_iter(v.len(), vec![1,1,0,0,0,0,1,1].into_iter().map(|x| x==0));
+        assert_eq!(target_values.sum_masked(&mask), 1.0);
+    }
+
+    #[test]
     fn test_scaled_bitslice_sum_masked_and() {
         let n = 8;
         let v = vec![0.25, 0.5, 0.25, 0.50, 0.0, 0.0, -0.25, 0.50];

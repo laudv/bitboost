@@ -2,17 +2,17 @@ use log::debug;
 
 use bits::{BitSet, ScaledBitSlice};
 use conf::Config;
-use dataset::NumericalType;
+use dataset::NumT;
 use tree::loss::{LossFun, LossFunGrad, LossFunHess, LossFunHessConst};
 
-pub type ApproxTarget = ScaledBitSlice<NumericalType>;
+pub type ApproxTarget = ScaledBitSlice<NumT>;
 
 pub struct EvalValue {
     /// The optimal value for a certain leaf.
-    pub optimal_value: NumericalType,
+    pub optimal_value: NumT,
 
     /// The contribution to the global loss function of this particular leaf.
-    pub loss: NumericalType,
+    pub loss: NumT,
 
     /// The number of examples in the leaf.
     pub example_count: u64,
@@ -31,14 +31,15 @@ pub trait SplitEvaluator {
     /// used by this evaluator.
     fn convert_target_values<I1, I2>(&self, nvalues: usize, target_values: I1, prev_pred: I2)
         -> ApproxTarget
-    where I1: Iterator<Item = NumericalType>,
-          I2: Iterator<Item = NumericalType>;
+    where I1: Iterator<Item = NumT>,
+          I2: Iterator<Item = NumT>;
 
     /// Evaluates a split in the left and the right leaf.
     fn eval_split(&self, data: &Self::EvaluationData,
                   parent_examples: &Self::ExampleSelector,
-                  left_examples: &Self::ExampleSelector)
-        -> (EvalValue, EvalValue);
+                  left_examples: &Self::ExampleSelector,
+                  force_compute_loss: bool)
+        -> Option<(EvalValue, EvalValue)>;
 }
 
 /// Evaluate split approximately using the first derivative of the loss function (gradients) and
@@ -66,8 +67,8 @@ where L: 'a + LossFun + LossFunGrad + LossFunHessConst {
 
     fn convert_target_values<I1, I2>(&self, nvalues: usize, target_values: I1, prev_pred: I2)
         -> ApproxTarget
-    where I1: Iterator<Item = NumericalType>,
-          I2: Iterator<Item = NumericalType>,
+    where I1: Iterator<Item = NumT>,
+          I2: Iterator<Item = NumT>,
     {
         let gradients = target_values.zip(prev_pred).map(|(t, p)| self.loss_fun.eval_grad(t, p));
         ApproxTarget::new(
@@ -79,29 +80,35 @@ where L: 'a + LossFun + LossFunGrad + LossFunHessConst {
         )
     }
 
-    fn eval_split(&self, data: &Self::EvaluationData, parent: &BitSet, left: &BitSet)
-        -> (EvalValue, EvalValue)
+    fn eval_split(&self, data: &Self::EvaluationData, parent: &BitSet, left: &BitSet,
+                  force_compute_loss: bool)
+        -> Option<(EvalValue, EvalValue)>
     {
         let lambda = self.config.reg_lambda;
         let left_count = parent.count_and(left);
         let right_count = parent.true_count() - left_count;
 
+        if !force_compute_loss && (left_count < self.config.min_nleaves || right_count <
+                                   self.config.min_nleaves) {
+            return None;
+        }
+
         let left_grad_sum = data.sum_masked_and(parent, left, left_count);
         let right_grad_sum = data.sum_masked_andnot(parent, left, right_count);
 
         let const_hess = self.loss_fun.get_const_hess();
-        let left_hess_sum = const_hess * left_count as NumericalType;
-        let right_hess_sum = const_hess * right_count as NumericalType;
+        let left_hess_sum = const_hess * left_count as NumT;
+        let right_hess_sum = const_hess * right_count as NumT;
 
         let left_value = -left_grad_sum / (left_hess_sum + lambda);
         let right_value = -right_grad_sum / (right_hess_sum + lambda);
 
         let left_loss = -0.5 * ((left_grad_sum * left_grad_sum) / (left_hess_sum + lambda));
         let right_loss = -0.5 * ((right_grad_sum * right_grad_sum) / (right_hess_sum + lambda));
-        (
+        Some((
             EvalValue { optimal_value: left_value,  loss: left_loss, example_count: left_count },
             EvalValue { optimal_value: right_value, loss: right_loss, example_count: right_count },
-        )
+        ))
     }
 }
 
@@ -119,14 +126,14 @@ where L: 'a + LossFun + LossFunGrad + LossFunHess {
 
     fn convert_target_values<I1, I2>(&self, _nvalues: usize, _target_values: I1, _prev_pred: I2)
         -> ApproxTarget
-    where I1: Iterator<Item = NumericalType>,
-          I2: Iterator<Item = NumericalType>,
+    where I1: Iterator<Item = NumT>,
+          I2: Iterator<Item = NumT>,
     {
         unimplemented!()
     }
 
-    fn eval_split(&self, _data: &Self::EvaluationData, _parent: &BitSet, _left: &BitSet)
-        -> (EvalValue, EvalValue)
+    fn eval_split(&self, _data: &Self::EvaluationData, _parent: &BitSet, _left: &BitSet, _fc: bool)
+        -> Option<(EvalValue, EvalValue)>
     {
         unimplemented!()
     }

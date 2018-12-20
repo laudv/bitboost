@@ -37,6 +37,15 @@ impl BitSet {
         }
     }
 
+    pub fn from_parts(nbits: usize, vec: BitVec, true_count: u64) -> BitSet {
+        debug_assert_eq!(true_count, vec.count_ones());
+        BitSet {
+            vec: vec,
+            true_count: true_count,
+            used_nbits: nbits as u64,
+        }
+    }
+
     pub fn random(nbits: usize, frac1: f64) -> BitSet {
         let bitvec = BitVec::random(nbits, frac1);
         Self::from_bitvec(nbits, bitvec)
