@@ -50,7 +50,7 @@ pub fn get_bitpos<T: Integer>(bit_index: usize) -> u8 {
 
 const BITBLOCK_BYTES: usize = 32; // 32*8 = 256 bits per block
 
-/// Properly aligned bit blocks (cache boundary Intel 64B)
+/// Properly aligned bit blocks
 #[repr(align(32))]
 #[derive(Clone)]
 pub struct BitBlock {
@@ -58,15 +58,17 @@ pub struct BitBlock {
 }
 
 impl BitBlock {
-    pub fn nbytes() -> usize { size_of::<BitBlock>() }
+    pub fn nbytes() -> usize { size_of::<Self>() }
     pub fn nbits() -> usize { Self::nbytes() * 8 }
 
     pub fn zeros() -> BitBlock {
-        BitBlock { bytes: [0u8; BITBLOCK_BYTES] }
+        let bytes: [u8; BITBLOCK_BYTES] = [0u8; BITBLOCK_BYTES];
+        BitBlock { bytes: bytes }
     }
 
     pub fn ones() -> BitBlock {
-        BitBlock { bytes: [0xFFu8; BITBLOCK_BYTES] }
+        let bytes: [u8; BITBLOCK_BYTES] = [0xFFu8; BITBLOCK_BYTES];
+        BitBlock { bytes: bytes }
     }
 
     pub fn is_zero(&self) -> bool {
