@@ -51,6 +51,69 @@ def gen_lowcard_nom_dataset2(n, nattr, seed):
     frame = pandas.DataFrame(data = data)
     return frame
 
+def gen_lowcard_nom_dataset3(n, nattr, seed, max_depth):
+    np.random.seed(seed)
+
+    # generate columns
+    columns = []
+    for i in range(nattr):
+        card = np.random.randint(2, 16)
+        columns.append(np.random.randint(0, card, n))
+
+    # simulate a decision tree to generate output
+    output = np.zeros(n)
+    stack = []
+    stack.append(np.array(range(n))) # node selection
+    depths = [0]
+    node_count = 0
+
+    while stack:
+        examples = stack.pop(-1)
+        depth = depths.pop(-1)
+        node_count += 1
+
+        print(" ITER: #ex {}, #stack {}, depth {}, #nodes {}".format(len(examples),
+            len(stack), depth, node_count))
+
+        if depth < max_depth:
+            if len(examples) == 0: continue
+
+            max_tries = 16
+            for i in range(max_tries): # try 16 times for a non-zero split
+                column_j = np.random.randint(0, nattr)
+                values = columns[column_j][examples]
+
+                split_val = values[np.random.randint(0, len(values))]
+
+                left = examples[values == split_val]
+                if len(left) > 0 and len(left) < len(examples): break
+                print(" NON-ZERO SPLIT FAIL {} col{}={}".format(i, column_j, split_val),
+                        "zero it is" if i==max_tries-1 else "")
+
+            right = examples[values != split_val]
+
+            print("SPLIT: column {}, split_val {}, #left {}, #right {}".format(
+                column_j, split_val, len(left), len(right)))
+
+            stack.append(right)
+            stack.append(left) # left first
+            depths.append(depth + 1) # right
+            depths.append(depth + 1) # left
+        else:
+            leaf_value = np.random.rand()
+            print(" LEAF: value {}".format(leaf_value))
+            output[examples] = leaf_value
+
+    output += 0.05 * np.random.randn(n)
+
+    data = {}
+    for (i, col) in enumerate(columns):
+        data["col{}".format(i)] = col
+    data["output"] = output.round(3)
+
+    frame = pandas.DataFrame(data = data)
+    return frame
+
 def gen_simple_lowcard_nom_dataset(n, seed):
     np.random.seed(seed)
     data = {
@@ -72,7 +135,7 @@ def gen_simple_lowcard_nom_dataset(n, seed):
 
 if __name__ == "__main__":
     seed = 91
-    n = 1000000
+    n = 100000
     attr = 4
     compression = False
     test_frac = 0.0
@@ -83,7 +146,7 @@ if __name__ == "__main__":
 
     ftrain = "/tmp/train{:03}-{}.csv{}".format(attr, n, compr_ext)
     ftest = "/tmp/test{:03}-{}.csv{}".format(attr, n, compr_ext)
-    frame = gen_lowcard_nom_dataset2(int(n * (1.0+test_frac)), attr, seed)
+    frame = gen_lowcard_nom_dataset3(int(n * (1.0+test_frac)), attr, seed, max_depth=5)
 
     print(ftrain)
     frame[0:n].to_csv(ftrain, header=True, index=False, compression=compr_opt)
