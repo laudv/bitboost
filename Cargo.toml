@@ -7,10 +7,11 @@ autobenches = false
 [dependencies]
 num = "0.2"
 rand = "0.6.1"
-#flate2 = "1.0.6"
-#csv = "1.0.2"
+fnv = "1.0.6" # fast hasher for small keys
 
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
+
+#flate2 = "1.0.6"
 
 [dev-dependencies]
 criterion = "0.2"

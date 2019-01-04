@@ -1,4 +1,4 @@
-use dataset::NumT;
+use NumT;
 
 /// A template for loss functions
 pub trait LossFun {

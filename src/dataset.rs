@@ -1,15 +1,19 @@
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 use std::time::Instant;
+use std::collections::HashMap;
 
-use log::info;
+use log::{info, warn};
 
 use NumT;
+use NomT;
+
 use config::Config;
 
 pub enum FeatureRepr {
-    /// A bitslice discretized representation of a feature.
-    BitSlice,
+
+    /// (cardinality, vec of cat. id's), id's are 0, 1, 2,..., cardinality
+    CatFeature(usize, Vec<NomT>),
 }
 
 pub struct Feature {
@@ -20,7 +24,7 @@ pub struct Feature {
     raw_data: Vec<NumT>,
 
     /// A representation used by the tree learner.
-    reprs: Vec<FeatureRepr>,
+    repr: Option<FeatureRepr>,
 }
 
 pub struct Dataset {
@@ -41,13 +45,42 @@ impl Feature {
             id: id,
             name: name,
             raw_data: raw_data,
-            reprs: Vec::new(),
+            repr: None,
         }
     }
 
     pub fn id(&self) -> usize { self.id }
     pub fn name(&self) -> &str { &self.name }
     pub fn get_value(&self, i: usize) -> NumT { self.raw_data[i] }
+
+    pub fn get_raw_data(&self) -> &[NumT] { &self.raw_data }
+
+    pub fn add_cat_feature_repr(&mut self) {
+        let mut card = 0 as NomT;
+        let mut cat_feat_data = Vec::new();
+        let mut map = HashMap::<i64, NomT>::new();
+        for v in &self.raw_data {
+            let k = v.round() as i64;
+            if !map.contains_key(&k) {
+                assert_ne!(card, 0xFFFF);
+                map.insert(k, card);
+                card += 1;
+            };
+            let id = map[&k];
+            cat_feat_data.push(id);
+        }
+        self.repr = Some(FeatureRepr::CatFeature(card as usize, cat_feat_data));
+    }
+
+    pub fn get_repr(&self) -> Option<&FeatureRepr> {
+        if let Some(ref repr) = self.repr { Some(repr) } else { None }
+    }
+
+    pub fn get_cat_feature_repr(&self) -> Option<(usize, &[NomT])> {
+        if let Some(FeatureRepr::CatFeature(card, ref data)) = self.repr {
+            Some((card, data))
+        } else { None }
+    }
 }
 
 
@@ -134,11 +167,16 @@ impl Dataset {
         Ok(feature_names)
     }
 
-    fn gen_reprs(config: &Config, _dataset: &mut Dataset) -> Result<(), String> {
+    fn gen_reprs(config: &Config, dataset: &mut Dataset) -> Result<(), String> {
         info!("Generating column representations...");
 
-        for i in &config.categorical_columns {
-            println!("{} is a cat column", i);
+        for &i in &config.categorical_columns {
+            if let Some(f) = dataset.get_feature_mut(i) {
+                info!("Column {} is categorical", i);
+                f.add_cat_feature_repr();
+            } else {
+                warn!("Unknown feature specified as categorical: {}", i);
+            }
         }
 
         Ok(())
@@ -149,9 +187,17 @@ impl Dataset {
     pub fn features(&self) -> &[Feature] { &self.features }
     pub fn target(&self) -> &Feature { &self.target }
 
-    pub fn get_feature(&self, feat_id: usize) -> Result<&Feature, String> {
-        let i = try_or_str!(self.features.binary_search_by_key(&feat_id, |f| f.id()),
-                            "feature {} not found", feat_id);
-        Ok(&self.features[i])
+    fn find_feature_index_by_id(&self, feat_id: usize) -> Option<usize> {
+        self.features.binary_search_by_key(&feat_id, |f| f.id()).ok()
+    }
+
+    pub fn get_feature(&self, feat_id: usize) -> Option<&Feature> {
+        if let Some(i) = self.find_feature_index_by_id(feat_id) { Some(&self.features[i]) }
+        else { None }
+    }
+
+    pub fn get_feature_mut(&mut self, feat_id: usize) -> Option<&mut Feature> {
+        if let Some(i) = self.find_feature_index_by_id(feat_id) { Some(&mut self.features[i]) }
+        else { None }
     }
 }

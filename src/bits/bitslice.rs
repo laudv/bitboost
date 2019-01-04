@@ -8,20 +8,20 @@ pub trait BitSliceLayout {
     fn weights(i: usize) -> u64;
 }
 
-macro_rules! impl_bitslice_width {
-    ($name:ident, $width:expr, $weights:expr) => {
-        pub struct $name;
-        impl BitSliceLayout for $name {
-            fn width() -> usize { $width }
-            fn weights(i: usize) -> u64 { $weights[i] }
-        }
-    }
-}
-
-impl_bitslice_width!(BitSlice1_1, 1, [1]);
-impl_bitslice_width!(BitSlice2_2, 2, [1, 2]);
-impl_bitslice_width!(BitSlice4_2, 4, [1, 2, 4, 8]);
-impl_bitslice_width!(BitSlice8_1, 8, [1, 2, 4, 8, 16, 32, 64, 128]);
+//macro_rules! impl_bitslice_width {
+//    ($name:ident, $width:expr, $weights:expr) => {
+//        pub struct $name;
+//        impl BitSliceLayout for $name {
+//            fn width() -> usize { $width }
+//            fn weights(i: usize) -> u64 { $weights[i] }
+//        }
+//    }
+//}
+//
+//impl_bitslice_width!(BitSlice1_1, 1, [1]);
+//impl_bitslice_width!(BitSlice2_2, 2, [1, 2]);
+//impl_bitslice_width!(BitSlice4_2, 4, [1, 2, 4, 8]);
+//impl_bitslice_width!(BitSlice8_1, 8, [1, 2, 4, 8, 16, 32, 64, 128]);
 
 
 
