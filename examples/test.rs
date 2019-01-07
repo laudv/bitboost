@@ -16,6 +16,7 @@ pub fn main() -> Result<(), String> {
     config.target_feature_id = -1;
     config.categorical_columns = (0..256).collect();
     config.max_tree_depth = 5;
+    config.min_sum_hessian = 1.0;
 
     let args: Vec<String> = env::args().collect();
     let filename = args.get(1).ok_or("no data file given")?;
@@ -33,6 +34,13 @@ pub fn main() -> Result<(), String> {
     let elapsed = now.elapsed();
     println!("TRAINED IN {} ms", (elapsed.as_secs() as f32 * 1e3 +
              elapsed.subsec_micros() as f32 * 1e-3) / r as f32);
+
+
+    let tree = learner.into_tree();
+    let eval = tree.evaluate(&dataset, &L2Loss::new());
+
+    println!("eval: {:e}", eval);
+    println!("{:?}", tree);
 
     Ok(())
 }

@@ -1,13 +1,13 @@
 import numpy as np
 import pandas
 
-def gen_lowcard_nom_dataset(n, nattr, seed, max_depth):
+def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
     np.random.seed(seed)
 
     # generate columns
     columns = []
     for i in range(nattr):
-        card = np.random.randint(2, 16)
+        card = np.random.randint(card_range[0], card_range[1])
         columns.append(np.random.randint(0, card, n))
 
     # simulate a decision tree to generate output
@@ -15,15 +15,17 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth):
     stack = []
     stack.append(np.array(range(n))) # node selection
     depths = [0]
+    node_ids = [0]
     node_count = 0
 
     while stack:
         examples = stack.pop(-1)
         depth = depths.pop(-1)
+        node_id = node_ids.pop(-1)
         node_count += 1
 
-        print(" ITER: #ex {}, #stack {}, depth {}, #nodes {}".format(len(examples),
-            len(stack), depth, node_count))
+        print(" ITER: node_id {}, #ex {}, #stack {}, depth {}, #nodes {}".format(
+            node_id, len(examples), len(stack), depth, node_count))
 
         if depth < max_depth:
             if len(examples) == 0: continue
@@ -42,20 +44,22 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth):
 
             right = examples[values != split_val]
 
-            print("SPLIT: column {}, split_val {}, #left {}, #right {}".format(
-                column_j, split_val, len(left), len(right)))
+            print("SPLIT: node_id {}, column {}, split_val {}, #left {}, #right {}".format(
+                node_id, column_j, split_val, len(left), len(right)))
 
             stack.append(right)
             stack.append(left) # left first
             depths.append(depth + 1) # right
             depths.append(depth + 1) # left
+            node_ids.append(2 * node_id + 2)
+            node_ids.append(2 * node_id + 1)
         else:
             leaf_value = np.random.rand()
-            print(" LEAF: value {}".format(leaf_value))
+            print(" LEAF: node_id {} value {}".format(node_id, leaf_value))
             output[examples] = leaf_value
 
     # add some noise
-    output += 0.05 * np.random.randn(n)
+    #output += 0.05 * np.random.randn(n)
 
     data = {}
     for (i, col) in enumerate(columns):
@@ -68,7 +72,9 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth):
 if __name__ == "__main__":
     seed = 91
     n = 100000
-    attr = 16
+    attr = 8
+    max_depth = 3
+    card_range = [4, 5]
     compression = False
     test_frac = 0.0
 
@@ -78,7 +84,9 @@ if __name__ == "__main__":
 
     ftrain = "/tmp/train{:03}-{}.csv{}".format(attr, n, compr_ext)
     ftest = "/tmp/test{:03}-{}.csv{}".format(attr, n, compr_ext)
-    frame = gen_lowcard_nom_dataset(int(n * (1.0+test_frac)), attr, seed, max_depth=4)
+    frame = gen_lowcard_nom_dataset(int(n * (1.0+test_frac)), attr, seed,
+            max_depth=max_depth,
+            card_range=card_range)
 
     print(ftrain)
     frame[0:n].to_csv(ftrain, header=True, index=False, compression=compr_opt)

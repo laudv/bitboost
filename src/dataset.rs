@@ -1,9 +1,10 @@
-use std::io::{BufRead, BufReader};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::iter::FromIterator;
 use std::time::Instant;
-use std::collections::HashMap;
 
-use log::{info, warn};
+use log::{info, warn, debug};
 
 use NumT;
 use NomT;
@@ -12,12 +13,18 @@ use config::Config;
 
 pub enum FeatureRepr {
 
-    /// (cardinality, vec of cat. id's), id's are 0, 1, 2,..., cardinality
+    /// (cardinality, vec of cats), cats are 0, 1, 2, ..., cardinality-1
     CatFeature(usize, Vec<NomT>),
 }
 
 pub struct Feature {
+    /// Linear index of feature.
     id: usize,
+
+    /// The column number of the feature in the dataset.
+    colnum: usize,
+
+    /// The name from the header of the dataset.
     name: String,
 
     /// The raw data from the input file.
@@ -40,9 +47,10 @@ pub struct Dataset {
 // - Feature impl ---------------------------------------------------------------------------------
 
 impl Feature {
-    fn new(id: usize, name: String, raw_data: Vec<NumT>) -> Feature {
+    fn new(colnum: usize, name: String, raw_data: Vec<NumT>) -> Feature {
         Feature {
-            id: id,
+            id: 0,
+            colnum: colnum,
             name: name,
             raw_data: raw_data,
             repr: None,
@@ -50,25 +58,39 @@ impl Feature {
     }
 
     pub fn id(&self) -> usize { self.id }
+    pub fn set_id(&mut self, feat_id: usize) { self.id = feat_id }
+
+    pub fn colnum(&self) -> usize { self.colnum }
     pub fn name(&self) -> &str { &self.name }
     pub fn get_value(&self, i: usize) -> NumT { self.raw_data[i] }
 
     pub fn get_raw_data(&self) -> &[NumT] { &self.raw_data }
 
-    pub fn add_cat_feature_repr(&mut self) {
-        let mut card = 0 as NomT;
-        let mut cat_feat_data = Vec::new();
-        let mut map = HashMap::<i64, NomT>::new();
+    fn add_cat_repr(&mut self) {
+        let mut set = HashSet::<i64>::new();
+
         for v in &self.raw_data {
             let k = v.round() as i64;
-            if !map.contains_key(&k) {
-                assert_ne!(card, 0xFFFF);
-                map.insert(k, card);
-                card += 1;
-            };
+            assert_ne!(set.len(), 0xFFFF);
+            set.insert(k);
+        }
+
+        let card = set.len();
+
+        // map values to 0,1,2,3...,card-1
+        let map: HashMap<i64, NomT> = {
+            let mut keys = set.into_iter().collect::<Vec<i64>>();
+            keys.sort();
+            HashMap::from_iter(keys.into_iter().enumerate().map(|(i,k)| (k, i as NomT)))
+        };
+
+        let mut cat_feat_data = Vec::with_capacity(self.raw_data.len());
+        for v in &self.raw_data {
+            let k = v.round() as i64;
             let id = map[&k];
             cat_feat_data.push(id);
         }
+
         self.repr = Some(FeatureRepr::CatFeature(card as usize, cat_feat_data));
     }
 
@@ -76,7 +98,7 @@ impl Feature {
         if let Some(ref repr) = self.repr { Some(repr) } else { None }
     }
 
-    pub fn get_cat_feature_repr(&self) -> Option<(usize, &[NomT])> {
+    pub fn get_cat_repr(&self) -> Option<(usize, &[NomT])> {
         if let Some(FeatureRepr::CatFeature(card, ref data)) = self.repr {
             Some((card, data))
         } else { None }
@@ -135,6 +157,13 @@ impl Dataset {
             .collect::<Vec<Feature>>();
         let target = features.remove(target_id);
 
+        // Create linear feature ids
+        features.iter_mut().enumerate().for_each(|(i, f)| f.set_id(i));
+
+        for f in features.iter() {
+            debug!("feature {} {}", f.id(), f.colnum());
+        }
+
         let elapsed = start.elapsed();
         info!("Loaded {} features of length {} in CSV format in {:.2} s",
               features.len(), record_count,
@@ -171,9 +200,9 @@ impl Dataset {
         info!("Generating column representations...");
 
         for &i in &config.categorical_columns {
-            if let Some(f) = dataset.get_feature_mut(i) {
+            if let Some(f) = dataset.get_feature_by_colnum_mut(i) {
                 info!("Column {} is categorical", i);
-                f.add_cat_feature_repr();
+                f.add_cat_repr();
             } else {
                 warn!("Unknown feature specified as categorical: {}", i);
             }
@@ -187,17 +216,33 @@ impl Dataset {
     pub fn features(&self) -> &[Feature] { &self.features }
     pub fn target(&self) -> &Feature { &self.target }
 
-    fn find_feature_index_by_id(&self, feat_id: usize) -> Option<usize> {
-        self.features.binary_search_by_key(&feat_id, |f| f.id()).ok()
+    pub fn get_feature(&self, feat_id: usize) -> &Feature {
+        &self.features[feat_id]
     }
 
-    pub fn get_feature(&self, feat_id: usize) -> Option<&Feature> {
-        if let Some(i) = self.find_feature_index_by_id(feat_id) { Some(&self.features[i]) }
+    pub fn get_feature_mut(&mut self, feat_id: usize) -> &mut Feature {
+        &mut self.features[feat_id]
+    }
+
+    fn find_feature_index_by_id(&self, colnum: usize) -> Option<usize> {
+        self.features.binary_search_by_key(&colnum, |f| f.id()).ok()
+    }
+
+    pub fn get_feature_by_colnum(&self, colnum: usize) -> Option<&Feature> {
+        if let Some(i) = self.find_feature_index_by_id(colnum) { Some(&self.features[i]) }
         else { None }
     }
 
-    pub fn get_feature_mut(&mut self, feat_id: usize) -> Option<&mut Feature> {
-        if let Some(i) = self.find_feature_index_by_id(feat_id) { Some(&mut self.features[i]) }
+    pub fn get_feature_by_colnum_mut(&mut self, colnum: usize) -> Option<&mut Feature> {
+        if let Some(i) = self.find_feature_index_by_id(colnum) { Some(&mut self.features[i]) }
         else { None }
+    }
+
+    pub fn get_value(&self, feat_id: usize, example: usize) -> NumT {
+        self.get_feature(feat_id).get_raw_data()[example]
+    }
+
+    pub fn get_cat_value(&self, feat_id: usize, example: usize) -> Option<NomT> {
+        self.get_feature(feat_id).get_cat_repr().map(|(_card, data)| data[example])
     }
 }

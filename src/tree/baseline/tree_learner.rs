@@ -101,9 +101,6 @@ impl <'a> TreeLearner<'a> {
             debug!("N{:02}-F{:02} {:?}: gain {} ({:.4}, {:.4})", node_id, split.feature_id,
                 split.split_crit, gain, split.left_value, split.right_value);
 
-            self.tree.split_node(node_id, split.split_crit.clone(),
-                                 split.left_value, split.right_value);
-
             if !self.tree.is_max_leaf_node(left_id) {
                 // Split indirection to avoid borrower issues
                 let split_pos = self.split_examples(examples, &split.split_crit);
@@ -111,6 +108,9 @@ impl <'a> TreeLearner<'a> {
                 split_stack.push(Node2Split::new(left_id, split.left_loss, left_ex));
                 split_stack.push(Node2Split::new(right_id, split.right_loss, right_ex));
             }
+
+            self.tree.split_node(node_id, split.split_crit,
+                                 split.left_value, split.right_value);
         }
     }
 
@@ -142,7 +142,6 @@ impl <'a> TreeLearner<'a> {
                                 parent_examples: &[usize],
                                 cardinality: usize, data: &[NomT]) -> Option<Split>
     {
-        let lambda = self.config.reg_lambda;
         let min_hess = self.config.min_sum_hessian;
 
         let mut grad_sums = vec![0.0; cardinality];
@@ -170,21 +169,19 @@ impl <'a> TreeLearner<'a> {
             // eliminates splits where all examples go left/right
             if left_hess < min_hess || right_hess < min_hess { continue; }
 
-            let left_value = -left_grad / (left_hess + lambda);
-            let right_value = -right_grad / (right_hess + lambda);
-
-            let left_loss = -0.5 * ((left_grad * left_grad) / (left_hess + lambda));
-            let right_loss = -0.5 * ((right_grad * right_grad) / (right_hess + lambda));
+            let (left_value, left_loss) = self.best_value_and_loss(left_grad, left_hess);
+            let (right_value, right_loss) = self.best_value_and_loss(right_grad, right_hess);
 
             let gain = parent_loss - left_loss - right_loss;
 
-            debug!("F{:02}={:2} gain {:+6.1} ({:.4}, {:.4})", feature_id, j, gain, left_value, right_value);
+            debug!("F{:02}={:2} gain {:+.3e} ({:.4}, {:.4})",
+                    feature_id, j, gain, left_value, right_value);
 
             if gain > best_gain {
                 best_gain = gain;
                 best_split = Some(Split {
                     feature_id: feature_id,
-                    split_crit: SplitCrit::EqTest(feature_id, data[j]),
+                    split_crit: SplitCrit::EqTest(feature_id, j as NomT),
                     left_value: left_value,
                     right_value: right_value,
                     left_loss: left_loss,
@@ -201,9 +198,11 @@ impl <'a> TreeLearner<'a> {
             SplitCrit::Undefined => { panic!("unexpected undefined split crit"); },
             SplitCrit::EqTest(feat_id, value) => {
                 let (_, cat_data) = self.dataset
-                    .get_feature(*feat_id).unwrap()
-                    .get_cat_feature_repr().unwrap();
-                self.split_examples_cmp(examples, move |i| cat_data[i] == *value)
+                    .get_feature(*feat_id)
+                    .get_cat_repr().unwrap();
+                self.split_examples_cmp(examples, |i| {
+                    cat_data[i] == *value
+                })
             }
         }
     }
@@ -214,16 +213,19 @@ impl <'a> TreeLearner<'a> {
         let mut right_i = examples.len(); // index first right example (invalid initally)
 
         while left_i != right_i {
-            if is_left_fn(left_i) { left_i += 1; }
-            else {
+            if is_left_fn(examples[left_i]) {
+                left_i += 1;
+            } else {
                 right_i -= 1;
                 examples.swap(left_i, right_i);
             }
         }
 
-        // The order of the right examples is reversed
-        //let (_, r) = examples.split_at_mut(left_i);
-        //r.reverse();
+        // The examples are no longer sorted
+        //let (l, r) = examples.split_at_mut(left_i);
+        //l.sort();
+        //r.sort();
+
         left_i
     }
 
@@ -247,11 +249,7 @@ impl <'a> TreeLearner<'a> {
         self.best_value_and_loss(grad, hess)
     }
 
-    fn build_hist_cat(&self, node_id: usize, parent_examples: &[usize], data: &[NomT],
-                      buckets: &mut [HistVal]) {
-        for &i in parent_examples {
-            let j = data[i] as usize; // bucket number
-            buckets[j] += (self.gradients[i], 1.0);
-        }
+    pub fn into_tree(self) -> Tree {
+        self.tree
     }
 }

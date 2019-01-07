@@ -92,7 +92,7 @@ where SE: 'a + SplitEvaluator<EvaluationData = ScaledBitSlice<NumT>, ExampleSele
             let right_id = self.tree.right_child(node_id);
             let split_opt = self.find_best_split(loss, &examples);
 
-            // don't split if no better split is found
+            // Don't split if no better split is found
             if split_opt.is_none() { debug!("N{:03} no split", node_id); continue; }
 
             let split = split_opt.unwrap();

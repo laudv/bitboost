@@ -112,7 +112,7 @@ where L: 'a + LossFun + LossFunGrad + LossFunHessConst {
     }
 }
 
-/// Evaluate split approximately using a first or second order Taylor approximation of the lost
+/// Evaluate split approximately using a first or second order Taylor approximation of the loss
 /// function.
 pub struct SecondOrderSplitEvaluator<'a, L: 'a + LossFun> {
     _config: &'a Config,

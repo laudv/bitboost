@@ -1,3 +1,7 @@
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+
+use tree::loss::LossFun;
+use dataset::Dataset;
 
 use NumT;
 use NomT;
@@ -6,7 +10,7 @@ use NomT;
 pub enum SplitCrit {
     Undefined,
 
-    /// Check if feature_id has the given value (left eq, right not eq)
+    /// (feat_id, cat_value), equal goes left, not equal goes right
     EqTest(usize, NomT),
 }
 
@@ -26,10 +30,9 @@ impl Tree {
             split_crits: Vec::new(),
             node_values: Vec::new(),
         };
-        let ninternal = tree.max_ninternal();
         let nnodes = tree.max_nnodes();
 
-        tree.split_crits.resize(ninternal, SplitCrit::Undefined);
+        tree.split_crits.resize(nnodes, SplitCrit::Undefined);
         tree.node_values.resize(nnodes, 0.0);
 
         tree
@@ -70,6 +73,68 @@ impl Tree {
         self.node_values[right_id] = right_value;
 
         self.ninternal += 1;
+    }
+
+    pub fn predict(&self, dataset: &Dataset) -> Vec<NumT> {
+        let mut predictions = Vec::with_capacity(dataset.nexamples());
+        for i in 0..dataset.nexamples() {
+            let mut node_id = 0;
+            loop {
+                let split_crit = &self.split_crits[node_id];
+                match split_crit {
+                    &SplitCrit::EqTest(feat_id, split_val) => { // this is an internal node
+                        let value = dataset.get_cat_value(feat_id, i).expect("invalid feat_id");
+                        node_id = if value == split_val { self.left_child(node_id) }
+                                  else                  { self.right_child(node_id) };
+                    },
+                    &SplitCrit::Undefined => { // this is a leaf node
+                        predictions.push(self.node_values[node_id]);
+                        break;
+                    },
+                }
+            }
+        }
+        predictions
+    }
+
+    pub fn evaluate<L>(&self, dataset: &Dataset, loss: &L) -> NumT
+    where L: LossFun {
+        let targets = dataset.target().get_raw_data();
+        let predictions = self.predict(dataset);
+        let mut l = 0.0;
+
+        for (&y, yhat) in targets.iter().zip(predictions) {
+            l += loss.eval(y, yhat);
+        }
+
+        l
+    }
+}
+
+
+impl Debug for Tree {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        let mut stack = vec![(0, 0)];
+        while !stack.is_empty() {
+            let (node_id, depth) = stack.pop().unwrap();
+
+            let indent: String = std::iter::repeat("   ").take(depth).collect();
+            write!(f, "{}[{:<3}] val {:.5}", indent, node_id, self.node_values[node_id])?;
+
+            match self.split_crits[node_id] {
+                SplitCrit::EqTest(feat_id, split_value) => {
+                    let left = self.left_child(node_id);
+                    let right = self.right_child(node_id);
+                    writeln!(f, " eq.test F{:02}=={} ? {:3} :{:3}", feat_id, split_value, left, right)?;
+                    stack.push((right, depth+1));
+                    stack.push((left, depth+1));
+                },
+                SplitCrit::Undefined => {
+                    writeln!(f, " leaf")?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 

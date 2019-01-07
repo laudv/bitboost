@@ -44,7 +44,7 @@ impl <T> HistStore<T> {
         // Use the right amount of 'buckets' for each feature
         // Currently only categorical features; one bucket for each cat. feat. value.
         Self::new(dataset.features().iter().map(|f| {
-            if let Some((card, _)) = f.get_cat_feature_repr() { card as u32 }
+            if let Some((card, _)) = f.get_cat_repr() { card as u32 }
             else { panic!("non categorical feature not supported"); }
         }))
     }
