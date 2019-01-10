@@ -1,5 +1,12 @@
+import random
 import numpy as np
 import pandas
+
+random_vals = [-1.0, -0.8666666666666667, -0.7333333333333334, -0.6,
+        -0.4666666666666667, -0.33333333333333337, -0.19999999999999996,
+        -0.06666666666666665, 0.06666666666666665, 0.19999999999999996,
+        0.33333333333333326, 0.46666666666666656, 0.6000000000000001,
+        0.7333333333333334, 0.8666666666666667, 1.0]
 
 def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
     np.random.seed(seed)
@@ -54,7 +61,8 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
             node_ids.append(2 * node_id + 2)
             node_ids.append(2 * node_id + 1)
         else:
-            leaf_value = np.random.rand()
+            #leaf_value = np.random.rand()
+            leaf_value = random.choice(random_vals)
             print(" LEAF: node_id {} value {}".format(node_id, leaf_value))
             output[examples] = leaf_value
 
@@ -71,9 +79,9 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
 
 if __name__ == "__main__":
     seed = 91
-    n = 100000
-    attr = 8
-    max_depth = 3
+    n = 400
+    attr = 4
+    max_depth = 4
     card_range = [4, 5]
     compression = False
     test_frac = 0.0

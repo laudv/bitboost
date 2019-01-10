@@ -1,5 +1,10 @@
 use NumT;
 
+pub enum Learner {
+    Baseline,
+    BitLearner,
+}
+
 pub struct Config {
 
     // Dataset
@@ -11,9 +16,15 @@ pub struct Config {
     pub categorical_columns: Vec<usize>,
 
     // Tree
+    pub learner: Learner,
     pub max_tree_depth: usize,
     pub reg_lambda: NumT,
     pub min_sum_hessian: NumT,
+    pub bagging_fraction: NumT,
+    pub min_gain: NumT,
+
+    pub discr_lo: NumT,
+    pub discr_hi: NumT,
 }
 
 impl Config {
@@ -26,9 +37,15 @@ impl Config {
 
             categorical_columns: Vec::new(),
 
+            learner: Learner::BitLearner,
             max_tree_depth: 4,
             reg_lambda: 0.0,
             min_sum_hessian: 100.0,
+            bagging_fraction: 1.0,
+            min_gain: 1e-5,
+
+            discr_lo: -1.0,
+            discr_hi: 1.0,
         }
     }
 }

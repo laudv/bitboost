@@ -18,18 +18,5 @@ pub type NomT = u16; // nominal type
 pub mod config;
 pub mod dataset;
 pub mod bits;
+pub mod hist;
 pub mod tree;
-
-//extern crate flate2;
-//
-//
-////extern crate serde;
-////#[macro_use] extern crate serde_derive;
-////extern crate toml;
-//
-//pub type Float = f32;
-//
-//pub mod conf;
-//pub mod dataset;
-//pub mod bits;
-//pub mod tree;

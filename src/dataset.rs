@@ -9,12 +9,16 @@ use log::{info, warn, debug};
 use NumT;
 use NomT;
 
-use config::Config;
+use config::{Config, Learner};
+use bits::BitVec;
 
 pub enum FeatureRepr {
 
     /// (cardinality, vec of cats), cats are 0, 1, 2, ..., cardinality-1
     CatFeature(usize, Vec<NomT>),
+
+    /// Representation for cat. feature: each possible value has a bitvec.
+    BitVecFeature(Vec<BitVec>),
 }
 
 pub struct Feature {
@@ -66,7 +70,7 @@ impl Feature {
 
     pub fn get_raw_data(&self) -> &[NumT] { &self.raw_data }
 
-    fn add_cat_repr(&mut self) {
+    fn get_categories(&self) -> HashMap<i64, NomT> {
         let mut set = HashSet::<i64>::new();
 
         for v in &self.raw_data {
@@ -75,14 +79,18 @@ impl Feature {
             set.insert(k);
         }
 
-        let card = set.len();
-
         // map values to 0,1,2,3...,card-1
         let map: HashMap<i64, NomT> = {
             let mut keys = set.into_iter().collect::<Vec<i64>>();
             keys.sort();
             HashMap::from_iter(keys.into_iter().enumerate().map(|(i,k)| (k, i as NomT)))
         };
+
+        map
+    }
+
+    fn add_cat_repr(&mut self) {
+        let map = self.get_categories();
 
         let mut cat_feat_data = Vec::with_capacity(self.raw_data.len());
         for v in &self.raw_data {
@@ -91,7 +99,22 @@ impl Feature {
             cat_feat_data.push(id);
         }
 
-        self.repr = Some(FeatureRepr::CatFeature(card as usize, cat_feat_data));
+        self.repr = Some(FeatureRepr::CatFeature(map.len(), cat_feat_data));
+    }
+
+    pub fn add_bitvecs_repr(&mut self) {
+        let nexamples = self.raw_data.len();
+        let map = self.get_categories();
+
+        let mut bitvecs = vec![BitVec::zero_bits(nexamples); map.len()];
+        for (i, v) in self.raw_data.iter().enumerate() {
+            let k = v.round() as i64;
+            let id = map[&k];
+            let bitvec = &mut bitvecs[id as usize];
+            bitvec.set_bit(i, true);
+        }
+
+        self.repr = Some(FeatureRepr::BitVecFeature(bitvecs));
     }
 
     pub fn get_repr(&self) -> Option<&FeatureRepr> {
@@ -101,6 +124,12 @@ impl Feature {
     pub fn get_cat_repr(&self) -> Option<(usize, &[NomT])> {
         if let Some(FeatureRepr::CatFeature(card, ref data)) = self.repr {
             Some((card, data))
+        } else { None }
+    }
+
+    pub fn get_bitvec(&self, feat_val: NomT) -> Option<&BitVec> {
+        if let Some(FeatureRepr::BitVecFeature(ref bitvecs)) = self.repr {
+            bitvecs.get(feat_val as usize)
         } else { None }
     }
 }
@@ -202,7 +231,11 @@ impl Dataset {
         for &i in &config.categorical_columns {
             if let Some(f) = dataset.get_feature_by_colnum_mut(i) {
                 info!("Column {} is categorical", i);
-                f.add_cat_repr();
+
+                match config.learner {
+                    Learner::Baseline => f.add_cat_repr(),
+                    Learner::BitLearner => f.add_bitvecs_repr(),
+                }
             } else {
                 warn!("Unknown feature specified as categorical: {}", i);
             }
@@ -243,6 +276,19 @@ impl Dataset {
     }
 
     pub fn get_cat_value(&self, feat_id: usize, example: usize) -> Option<NomT> {
-        self.get_feature(feat_id).get_cat_repr().map(|(_card, data)| data[example])
+        match self.get_feature(feat_id).get_repr() {
+            Some(&FeatureRepr::BitVecFeature(ref bitvecs)) => {
+                let mut ret = None;
+                for (i, bitvec) in bitvecs.iter().enumerate() {
+                    if bitvec.get_bit(example) { ret = Some(i as NomT); break; }
+                }
+                ret
+            },
+            Some(&FeatureRepr::CatFeature(_card, ref data)) => {
+                Some(data[example])
+            },
+            _ => None
+        }
+
     }
 }

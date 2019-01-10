@@ -2,6 +2,7 @@ use std::mem::size_of;
 use std::ops::{Deref, DerefMut};
 use std::slice;
 use std::alloc;
+use std::iter::ExactSizeIterator;
 
 use rand::prelude::*;
 use rand::distributions::Bernoulli;
@@ -13,6 +14,7 @@ use bits::simd;
 
 const INTEL_CACHE_LINE: usize = 64;
 
+#[derive(Clone)]
 pub struct BitVec {
     blocks: Vec<BitBlock>,
 }
@@ -30,16 +32,16 @@ impl BitVec {
         let nblocks = BitBlock::blocks_required_for(nbits);
         let mut vec = Self::one_blocks(nblocks);
         {
-            let u64s = vec.cast_mut::<u64>();
+            let u64s = vec.cast_mut::<u64>();  // zero out the last bits
             let mut zeros = nblocks * BitBlock::nbits() - nbits;
             let mut i = u64s.len()-1;
             loop {
                 if zeros >= 64 { u64s[i] = 0; }
                 else           { u64s[i] >>= zeros; }
 
-                i -= 1;
                 if zeros > 64 { zeros -= 64; }
                 else          { break; }
+                i -= 1;
             }
         }
         vec
@@ -55,41 +57,70 @@ impl BitVec {
 
     // Aligned to cache line of 64B
     fn alloc(nblocks: usize, value: BitBlock) -> BitVec {
-        assert!(nblocks > 0);
-        let bytes = nblocks * size_of::<BitBlock>();
+        let mut bitvec = Self::alloc_uninitialized(nblocks);
+        for i in 0..nblocks {
+            bitvec[i] = value.clone();
+        }
+        bitvec
+    }
 
-        let mut vec = unsafe { 
-            let layout = alloc::Layout::from_size_align(bytes, INTEL_CACHE_LINE).unwrap();
+    // Aligned to cache line of 64B
+    fn alloc_uninitialized(nblocks: usize) -> BitVec {
+        assert!(nblocks > 0);
+        let nbytes = nblocks * BitBlock::nbytes();
+
+        let vec = unsafe { 
+            let layout = alloc::Layout::from_size_align(nbytes, INTEL_CACHE_LINE).unwrap();
             let ptr = alloc::alloc(layout) as *mut BitBlock;
 
             if ptr.is_null() { panic!("out of memory"); }
 
-            Vec::from_raw_parts(ptr, 0, nblocks)
+            Vec::from_raw_parts(ptr, nblocks, nblocks)
         };
-
-        for _ in 0..nblocks {
-            vec.push(value.clone());
-        }
 
         BitVec { blocks: vec }
     }
 
-    pub fn from_bool_iter<I>(mut iter: I) -> BitVec
+    pub fn from_bool_sized_iter<I>(iter: I) -> BitVec
+    where I: Iterator<Item = bool> + ExactSizeIterator {
+        Self::from_bool_iter(iter.len(), iter)
+    }
+
+    pub fn from_bool_iter<I>(nbits: usize, mut iter: I) -> BitVec
     where I: Iterator<Item = bool> {
-        let mut blocks = Vec::new();
-        loop {
-            let (done, block) = BitBlock::from_bool_iter(&mut iter);
-            blocks.push(block);
-            if done { break; }
+        let nblocks = BitBlock::blocks_required_for(nbits);
+        let mut bitvec = Self::alloc_uninitialized(nblocks);
+        for i in 0..nblocks {
+            let (_, block) = BitBlock::from_bool_iter(&mut iter);
+            bitvec[i] = block;
         }
-        assert!(blocks.len() > 0);
-        BitVec { blocks: blocks }
+        bitvec
+    }
+
+    pub fn from_block_sized_iter<T, I>(iter: I) -> BitVec
+    where T: Integer + Copy,
+          I: Iterator<Item = T> + ExactSizeIterator
+    {
+        Self::from_block_iter(iter.len(), iter)
+    }
+
+    pub fn from_block_iter<T, I>(nvalues: usize, mut iter: I) -> BitVec
+    where T: Integer + Copy,
+          I: Iterator<Item = T>
+    {
+        let nblocks = BitBlock::blocks_required_for(nvalues * size_of::<T>() * 8);
+        let mut bitvec = Self::alloc_uninitialized(nblocks);
+        for i in 0..nblocks {
+            let (_, block) = BitBlock::from_iter(&mut iter);
+            bitvec[i] = block;
+        }
+        bitvec
     }
 
     pub fn random(nbits: usize, frac1: f64) -> BitVec {
         let mut rng = thread_rng();
         let dist = Bernoulli::new(frac1);
-        BitVec::from_bool_iter(rng.sample_iter(&dist).take(nbits))
+        BitVec::from_bool_iter(nbits, rng.sample_iter(&dist).take(nbits))
     }
 
     pub fn nblocks(&self) -> usize { self.blocks.len() }
@@ -209,7 +240,7 @@ mod test {
         let f = |k| k<n && k%13==1;
         let iter = (0..n).map(f);
 
-        let vec = BitVec::from_bool_iter(iter);
+        let vec = BitVec::from_bool_iter(n, iter);
 
         for (i, block) in vec.iter().enumerate() {
             for j in 0..BitBlock::nbits() {
@@ -221,12 +252,32 @@ mod test {
     }
 
     #[test]
+    fn small_one_bits() {
+        let bitvec = BitVec::one_bits(50);
+        assert_eq!(bitvec.get_bit(0), true);
+        assert_eq!(bitvec.get_bit(49), true);
+        assert_eq!(bitvec.get_bit(50), false);
+        assert_eq!(bitvec.get_bit(51), false);
+    }
+
+    #[test]
+    fn test_from_iter() {
+        let n = 4367;
+        let f = |i| 101*i+13;
+        let vec = BitVec::from_block_iter(n, (0u32..n as u32).map(f));
+
+        for (i, &b_u32) in vec.cast::<u32>().iter().enumerate().take(n) {
+            assert_eq!(b_u32, f(i as u32));
+        }
+    }
+
+    #[test]
     fn test_cast_len() {
         let n = 13456;
         let f = |k| k<n && k%31==1;
         let iter = (0..n).map(f);
 
-        let vec = BitVec::from_bool_iter(iter);
+        let vec = BitVec::from_bool_iter(n, iter);
 
         assert_eq!(vec.nblocks(), n / 256 + 1);
         assert_eq!(vec.cast::<u128>().len(), vec.nblocks() * 2);
@@ -262,8 +313,8 @@ mod test {
         let f1 = |i: usize| ((i*17+2304) % 13) > 8;
         let f2 = |i: usize| ((i*23+2304) % 13) > 8;
 
-        let vec1 = BitVec::from_bool_iter((0..n).map(f1));
-        let vec2 = BitVec::from_bool_iter((0..n).map(f2));
+        let vec1 = BitVec::from_bool_iter(n, (0..n).map(f1));
+        let vec2 = BitVec::from_bool_iter(n, (0..n).map(f2));
 
         let mut c_and = 0;
         let mut c_andnot = 0;
@@ -307,6 +358,30 @@ mod test {
         for _ in 0..k {
             let vec1 = BitVec::random(n, 0.5);
             assert_eq!(vec1.count_ones(), vec1.count_ones32());
+        }
+    }
+
+    #[test]
+    fn test_alloc_zeros_end() {
+        {
+            // allocate some memory
+            let vec0 = BitVec::from_block_iter(3, 10u32..13u32);
+            assert_eq!(vec0.cast::<u32>()[1], 11);
+            assert_eq!(vec0.cast::<u32>().iter().cloned().last().unwrap(), 0);
+        }
+
+        for _ in 0..100 {
+            let vec1 = BitVec::from_block_iter(3, 10u32..13u32);
+            for (i, &b_u32) in vec1.cast::<u32>().iter().enumerate() {
+                if i < 3 { assert_eq!(b_u32, (10+i) as u32); }
+                else     { assert_eq!(b_u32, 0); }
+            }
+
+            let vec2 = BitVec::from_bool_iter(32, (0..32).map(|_| true));
+            for (i, &b_u32) in vec2.cast::<u32>().iter().enumerate() {
+                if i == 0 { assert_eq!(b_u32, 0xFFFFFFFF); }
+                else     { assert_eq!(b_u32, 0); }
+            }
         }
     }
 }

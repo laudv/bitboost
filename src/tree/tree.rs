@@ -1,5 +1,7 @@
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
+use log::debug;
+
 use tree::loss::LossFun;
 use dataset::Dataset;
 
@@ -12,6 +14,14 @@ pub enum SplitCrit {
 
     /// (feat_id, cat_value), equal goes left, not equal goes right
     EqTest(usize, NomT),
+}
+
+impl SplitCrit {
+    pub fn unpack_eqtest(&self) -> Option<(usize, NomT)> {
+        if let &SplitCrit::EqTest(feat_id, feat_val) = self {
+            Some((feat_id, feat_val))
+        } else { None }
+    }
 }
 
 pub struct Tree {
@@ -50,6 +60,8 @@ impl Tree {
     pub fn max_nnodes(&self) -> usize { (1 << (self.max_depth+1)) - 1 }
     pub fn nnodes(&self) -> usize { self.ninternal() + self.nleaves() }
 
+    pub fn node_value(&self, node_id: usize) -> NumT { self.node_values[node_id] }
+
     pub fn max_depth(&self) -> usize { self.max_depth }
     pub fn set_root_value(&mut self, value: NumT) {
         self.node_values[0] = value;
@@ -64,6 +76,7 @@ impl Tree {
                       right_value: NumT)
     {
         assert_eq!(self.split_crits[node_id], SplitCrit::Undefined);
+        assert!(!self.is_max_leaf_node(node_id));
 
         let left_id = self.left_child(node_id);
         let right_id = self.right_child(node_id);
@@ -104,6 +117,7 @@ impl Tree {
         let mut l = 0.0;
 
         for (&y, yhat) in targets.iter().zip(predictions) {
+            //debug!("{:+.4}   {:+.4} -> loss={:.4}", y, yhat, loss.eval(y, yhat));
             l += loss.eval(y, yhat);
         }
 
@@ -125,7 +139,7 @@ impl Debug for Tree {
                 SplitCrit::EqTest(feat_id, split_value) => {
                     let left = self.left_child(node_id);
                     let right = self.right_child(node_id);
-                    writeln!(f, " eq.test F{:02}=={} ? {:3} :{:3}", feat_id, split_value, left, right)?;
+                    writeln!(f, " eq.test F{:02}=={}", feat_id, split_value)?;
                     stack.push((right, depth+1));
                     stack.push((left, depth+1));
                 },

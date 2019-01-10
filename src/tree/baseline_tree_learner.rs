@@ -1,11 +1,9 @@
-use std::ops::{AddAssign, SubAssign};
 use log::debug;
 
 use NumT;
 use NomT;
 
 use tree::{Tree, SplitCrit};
-use tree::baseline::HistStore;
 use config::Config;
 use dataset::{Dataset, FeatureRepr};
 
@@ -31,46 +29,23 @@ struct Split {
     right_loss: NumT,
 }
 
-#[derive(PartialEq, Clone, Default)]
-struct HistVal {
-    grad_sum: NumT,
-    hess_sum: NumT,
-}
-
-impl AddAssign<(NumT, NumT)> for HistVal {
-    fn add_assign(&mut self, o: (NumT, NumT)) {
-        self.grad_sum += o.0;
-        self.hess_sum += o.1;
-    }
-}
-
-impl SubAssign<(NumT, NumT)> for HistVal {
-    fn sub_assign(&mut self, o: (NumT, NumT)) {
-        self.grad_sum -= o.0;
-        self.hess_sum -= o.1;
-    }
-}
-
 /// Baseline tree learner. Assumes constant second gradient (hessian) of one (= example count).
 pub struct TreeLearner<'a> {
     config: &'a Config,
     dataset: &'a Dataset,
     gradients: Vec<NumT>,
     tree: Tree,
-    hist_store: HistStore<HistVal>,
 }
 
 impl <'a> TreeLearner<'a> {
     pub fn new(config: &'a Config, data: &'a Dataset, gradients: Vec<NumT>) -> TreeLearner<'a> {
         let tree = Tree::new(config.max_tree_depth);
-        let hist_store = HistStore::for_dataset(data);
 
         TreeLearner {
             config: config,
             dataset: data,
             gradients: gradients,
             tree: tree,
-            hist_store: hist_store,
         }
     }
 
@@ -231,7 +206,6 @@ impl <'a> TreeLearner<'a> {
 
     pub fn reset(&mut self) {
         self.tree = Tree::new(self.config.max_tree_depth);
-        self.hist_store = HistStore::for_dataset(self.dataset);
     }
 
     fn best_value_and_loss(&self, grad: NumT, hess: NumT) -> (NumT, NumT) {
