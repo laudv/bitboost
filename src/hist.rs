@@ -1,7 +1,6 @@
 use std::ops::Sub;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
-use fnv::FnvHashMap as HashMap;
 use dataset::{Dataset, FeatureRepr};
 
 const INITIAL_HIST_STORE_CAPACITY: usize = 512;
@@ -9,8 +8,8 @@ const INITIAL_HIST_STORE_CAPACITY: usize = 512;
 /// Store a bunch of histograms together in one store. `T` is the information to store per
 /// histogram bucket (e.g. gradient sum, hessian sum, bucket count).
 pub struct HistStore<T> {
-    /// Map a (node_id, feature_id) to a range into the buffer.
-    ranges: HashMap<usize, (u32, u32)>,
+    /// Map a node_id to a range into the buffer.
+    ranges: Vec<(u32, u32)>,
 
     /// Storage for histogram data.
     buffer: Vec<T>,
@@ -24,7 +23,7 @@ pub struct HistStore<T> {
 }
 
 impl <T> HistStore<T> {
-    pub fn new<I>(bin_size_iter: I) -> HistStore<T>
+    pub fn new<I>(nnodes: usize, bin_size_iter: I) -> HistStore<T>
     where I: Iterator<Item = u32> {
         let mut hist_layout = Vec::new();
         let mut accum = 0;
@@ -36,17 +35,17 @@ impl <T> HistStore<T> {
         }
 
         HistStore {
-            ranges: HashMap::default(),
+            ranges: vec![(0, 0); nnodes],
             buffer: Vec::with_capacity(INITIAL_HIST_STORE_CAPACITY),
             hist_layout: hist_layout,
             recycle_list: Vec::new(),
         }
     }
 
-    pub fn for_dataset(dataset: &Dataset) -> HistStore<T> {
+    pub fn for_dataset(nnodes: usize, dataset: &Dataset) -> HistStore<T> {
         // Use the right amount of 'buckets' for each feature
         // Currently only categorical features; one bucket for each cat. feat. value.
-        Self::new(dataset.features().iter().map(|f| {
+        Self::new(nnodes, dataset.features().iter().map(|f| {
             match f.get_repr() {
                 Some(&FeatureRepr::CatFeature(card, _)) => card as u32,
                 Some(&FeatureRepr::BitVecFeature(ref bitvecs)) => bitvecs.len() as u32,
@@ -56,7 +55,7 @@ impl <T> HistStore<T> {
     }
 
     fn get_histograms_range(&self, node_id: usize) -> (usize, usize) {
-        let (lo, hi) = self.ranges[&node_id];
+        let (lo, hi) = self.ranges[node_id];
         (lo as usize, hi as usize)
     }
 
@@ -113,11 +112,11 @@ impl <T> HistStore<T> {
 
     pub fn alloc_histograms(&mut self, node_id: usize)
     where T: Default + Clone {
-        debug_assert!(!self.ranges.contains_key(&node_id));
         if let Some(freed_node_id) = self.recycle_list.pop() {
             // reuse previous histograms
-            let range = self.ranges.remove(&freed_node_id).unwrap();
-            self.ranges.insert(node_id, range);
+            let range = self.ranges[freed_node_id];
+            self.ranges[freed_node_id] = (0, 0);
+            self.ranges[node_id] = range;
         } else {
             // allocate new ones
             let total_bins = *self.hist_layout.last().unwrap() as usize;
@@ -125,7 +124,7 @@ impl <T> HistStore<T> {
             let new_len = old_len + total_bins;
             self.buffer.resize(new_len, T::default());
             debug_assert!(new_len < u32::max_value() as usize);
-            self.ranges.insert(node_id, (old_len as u32, new_len as u32));
+            self.ranges[node_id] = (old_len as u32, new_len as u32);
         }
     }
 

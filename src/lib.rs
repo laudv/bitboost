@@ -1,7 +1,6 @@
 extern crate log;
 extern crate rand;
 extern crate num;
-extern crate fnv;
 
 macro_rules! try_or_str {
     ($result:expr, $($arg:tt)*) => {{
@@ -18,5 +17,5 @@ pub type NomT = u16; // nominal type
 pub mod config;
 pub mod dataset;
 pub mod bits;
-pub mod hist;
+pub mod slice_store;
 pub mod tree;

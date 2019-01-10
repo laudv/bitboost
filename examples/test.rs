@@ -5,6 +5,7 @@ use std::env;
 use std::time::Instant;
 
 use spdyboost::config::{Config, Learner};
+use spdyboost::NumT;
 use spdyboost::dataset::Dataset;
 use spdyboost::tree::baseline_tree_learner::TreeLearner as BaselineLearner;
 use spdyboost::tree::bit_tree_learner::TreeLearner as BitTreeLearner;
@@ -19,7 +20,7 @@ pub fn main() -> Result<(), String> {
     let mut config = Config::new();
     config.target_feature_id = -1;
     config.categorical_columns = (0..256).collect();
-    config.max_tree_depth = 15;
+    config.max_tree_depth = 6;
     config.min_sum_hessian = 1.0;
     config.discr_lo = -1.0;
     config.discr_hi = 1.0;
@@ -46,10 +47,29 @@ pub fn main() -> Result<(), String> {
 
 
     let tree = learner.into_tree();
+    let pred = tree.predict(&dataset);
     let eval = tree.evaluate(&dataset, &L2Loss::new());
 
     println!("eval: {:e}", eval);
     println!("{:?}", tree);
+
+    println!("writing results...");
+    write_results(&pred);
+    println!("done");
+
+    Ok(())
+}
+
+use std::fs::File;
+use std::io::{Write, BufWriter, Error};
+
+fn write_results(res: &[NumT]) -> Result<(), Error> {
+
+    let mut file = File::create("/tmp/spdyboost_predictions.txt")?;
+
+    for &r in res {
+        writeln!(file, "{}", r)?;
+    }
 
     Ok(())
 }

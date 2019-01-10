@@ -79,8 +79,8 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
 
 if __name__ == "__main__":
     seed = 91
-    n = 400
-    attr = 4
+    n = 100000
+    attr = 16
     max_depth = 4
     card_range = [4, 5]
     compression = False
