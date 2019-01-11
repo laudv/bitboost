@@ -508,6 +508,38 @@ where B: 'a + Borrow<[BitBlock]>,
         //println!("{}, {}", x, v2);
         self.set_value(index, v2);
     }
+
+    pub unsafe fn sum_masked_unsafe(&self, index: usize, mask: u32) -> u32 {
+        debug_assert!(index < self.vec.block_len::<u32>() / self.info.width());
+        let base = (self.vec.as_ptr() as *const u32).add(self.info.width() * index);
+
+        let mut sum = 0;
+        for i in 0..self.info.width() {
+            let count = (*base.add(i) & mask).count_ones();
+            let weight = 1 << i;
+            sum += count * weight;
+        }
+
+        sum
+    }
+
+    pub fn sum_masked(&self, index: usize, mask: u32) -> u32 {
+        assert!(index < self.vec.block_len::<u32>() / self.info.width());
+        unsafe { self.sum_masked_unsafe(index, mask) }
+    }
+
+    pub unsafe fn sum_scaled_masked_unsafe(&self, index: usize, mask: u32) -> (NumT, u32)
+    where I: BitSliceScaleInfo {
+        let count = mask.count_ones();
+        let sum = self.sum_masked_unsafe(index, mask);
+        (self.linproj(sum as NumT, count as NumT), count)
+    }
+
+    pub fn sum_scaled_masked(&self, index: usize, mask: u32) -> (NumT, u32)
+    where I: BitSliceScaleInfo {
+        assert!(index < self.vec.block_len::<u32>() / self.info.width());
+        unsafe { self.sum_scaled_masked_unsafe(index, mask) }
+    }
 }
 
 impl <'a, B, I> Deref for BitSlice<'a, B, I>
@@ -798,16 +830,47 @@ mod test {
         }
     }
 
+    fn bitslice_sum_block(info: &BitSliceRuntimeInfo) {
+        let n = 10_000;
+
+        let mut store = BitBlockStore::new(16);
+        let range = store.alloc_zero_bitslice(n, info);
+        let mut slice = store.get_bitslice_mut(range, info);
+
+        let mut sum_check = 0.0;
+        let mut sum_check_u32 = 0u32;
+        for i in 0..n {
+            if i % 32 == 0 && i != 0 {
+                let j = i / 32 - 1;
+                let sum = slice.sum_scaled_masked(j, 0xFFFFFFFF);
+                let sum_u32 = slice.sum_masked(j, 0xFFFFFFFF);
+                assert_eq!(sum_u32, sum_check_u32);
+                assert!((sum - sum_check).abs() < 1e-5);
+                sum_check = 0.0;
+                sum_check_u32 = 0;
+            }
+
+            let k = (((101*i*i+37) >> 3) % info.nunique_values() as usize) as u8;
+            slice.set_value(i, k);
+
+            sum_check += slice.get_scaled_value(i);
+            sum_check_u32 += k as u32;
+        }
+    }
+
     #[test]
     fn bitslice() {
         let info = BitSliceRuntimeInfo::new(1, 0.0, 1.0);
         bitslice_get_set_value(&info);
+        bitslice_sum_block(&info);
 
         let info = BitSliceRuntimeInfo::new(2, 0.0, 1.0);
         bitslice_get_set_value(&info);
+        bitslice_sum_block(&info);
 
         let info = BitSliceRuntimeInfo::new(4, 0.0, 1.0);
         bitslice_get_set_value(&info);
+        bitslice_sum_block(&info);
     }
 
     #[test]
@@ -819,4 +882,5 @@ mod test {
 
         let _slice = store.get_bitslice(range, &info);
     }
+
 }

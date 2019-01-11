@@ -35,13 +35,12 @@ pub fn main() -> Result<(), String> {
     let mut learner = BitTreeLearner::new(&config, &dataset, gradients);
     //let mut learner = BaselineLearner::new(&config, &dataset, gradients);
 
-    let r = 1;
+    let r = 10;
     let now = Instant::now();
     for _ in 0..r { learner.reset(); learner.train(); }
     let elapsed = now.elapsed();
     println!("TRAINED IN {} ms", (elapsed.as_secs() as f32 * 1e3 +
              elapsed.subsec_micros() as f32 * 1e-3) / r as f32);
-
 
     let tree = learner.into_tree();
     let pred = tree.predict(&dataset);

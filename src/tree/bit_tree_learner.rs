@@ -1,4 +1,5 @@
 use std::ops::{Sub, Add};
+use std::time::Instant;
 
 use log::debug;
 
@@ -160,7 +161,7 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
             let split = split_opt.unwrap();
             let (feat_id, feat_val) = split.split_crit.unpack_eqtest().expect("not an EqTest");
 
-            self.debug_print_split(&n2s, &split);
+            //self.debug_print_split(&n2s, &split);
 
             // Enqueue children to be split if they are not leaves
             if !self.tree.is_max_leaf_node(self.tree.left_child(node_id)) {
@@ -170,16 +171,6 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
                 // Schedule the left and right children to be split
                 stack.push(right_n2s);
                 stack.push(left_n2s);
-
-                //let mut left = self.split_examples(&n2s, left_id, split.left_loss, val_masks,
-                //                               |pm, vm| pm & vm);
-                //let mut right = self.split_examples(&n2s, right_id, split.right_loss, val_masks,
-                //                                |pm, vm| pm & !vm);
-
-                //// Ensure that nodes2split have histograms ready to use
-                //self.build_histograms(&mut left);
-                //self.derive_histograms(&mut right, n2s.hists_range, left.hists_range);
-
             }
 
             // Set tree node values
@@ -196,8 +187,8 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
         let mut best_gain = self.config.min_gain;
         let mut best_split = None;
 
-        print!("N{:03}: ", n2s.node_id);
-        self.hist_store.debug_print(n2s.hists_range);
+        //print!("N{:03}: ", n2s.node_id);
+        //self.hist_store.debug_print(n2s.hists_range);
 
         let (pgrad, phess) = (n2s.grad_sum, n2s.hess_sum);
         let ploss = self.get_loss(pgrad, phess);
@@ -217,8 +208,8 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
                 let rloss = self.get_loss(rgrad, rhess);
                 let gain = ploss - lloss - rloss;
 
-                debug!("N{:03}-F{:02}={:<3} candidate gain {:.3}",
-                       n2s.node_id, feat_id, feat_val, gain);
+//                debug!("N{:03}-F{:02}={:<3} candidate gain {:.3}",
+//                       n2s.node_id, feat_id, feat_val, gain);
 
                 if gain > best_gain {
                     best_gain = gain;
@@ -280,14 +271,6 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
         self.derive_histograms(&parent_n2s, &left_n2s, &right_n2s);
         right_n2s.grad_sum = parent_n2s.grad_sum - left_n2s.grad_sum;
         right_n2s.hess_sum = parent_n2s.hess_sum - left_n2s.hess_sum;
-        {
-            // test if equal to parent-left
-            let (g, h) = self.hist_store.sum_hist(right_n2s.hists_range, 0).unpack();
-            let dg = (g - right_n2s.grad_sum).abs();
-            let dh = (h - right_n2s.hess_sum).abs();
-            println!("grad_diff {}vs{}: {}", left_id, right_id, dg);
-            println!("hess_diff {}vs{}: {}", left_id, right_id, dh);
-        }
 
         (left_n2s, right_n2s)
     }
@@ -320,6 +303,8 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
 
             child_masks.set(j, mask);
         }
+
+        debug!("N{:03}: zero block count {} / {}", child_id, zero_count, n_u32);
         
         child_n2s
     }
@@ -363,6 +348,21 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
 
     /// OPTIMIZE THIS
     fn get_grad_and_hess_sums(&self, n2s: &Node2Split, feat_val_mask: BitVecRef) -> (NumT, NumT) {
+        //let start = Instant::now();
+
+        //let res = self.get_grad_and_hess_sums_naive(n2s, feat_val_mask);
+        //let res = self.get_grad_and_hess_sums_uncompr(n2s, feat_val_mask);
+        let res = self.get_grad_and_hess_sums_compr(n2s, feat_val_mask);
+
+        //let dur = start.elapsed();
+        //println!("sum time: {} ns", dur.subsec_nanos() as f32);
+
+        res
+    }
+
+    fn get_grad_and_hess_sums_naive(&self, n2s: &Node2Split, feat_val_mask: BitVecRef)
+        -> (NumT, NumT)
+    {
         let ems_bitset = self.mask_store.get_bitvec(n2s.mask_range);
         let idx_bitset = self.index_store.get_bitvec(n2s.idx_range);
 
@@ -396,9 +396,58 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
         (sum, count as NumT)
     }
 
+    fn get_grad_and_hess_sums_uncompr(&self, n2s: &Node2Split, feat_val_mask: BitVecRef)
+        -> (NumT, NumT)
+    {
+        let ems = self.mask_store.get_bitvec(n2s.mask_range);
+        let gradients = self.gradient_store.get_bitslice(n2s.grad_range, &self.bitslice_info);
+        let n_u32 = ems.block_len::<u32>();
+
+        let mut count = 0;
+        let mut sum = 0.0;
+
+        for i in 0..n_u32 {
+            let em = ems.get::<u32>(i);
+            let vm = feat_val_mask.get::<u32>(i);
+            
+            let p = gradients.sum_scaled_masked(i, vm & em);
+            sum += p.0;
+            count += p.1;
+        }
+
+        (sum, count as NumT)
+    }
+
+    fn get_grad_and_hess_sums_compr(&self, n2s: &Node2Split, feat_val_mask: BitVecRef)
+        -> (NumT, NumT)
+    {
+        let ems = self.mask_store.get_bitvec(n2s.mask_range);
+        let gradients = self.gradient_store.get_bitslice(n2s.grad_range, &self.bitslice_info);
+        let indices = self.index_store.get_bitvec(n2s.idx_range);
+        let n_u32 = indices.block_len::<u32>();
+
+        let mut count = 0;
+        let mut sum = 0.0;
+
+        for i in 0..n_u32 {
+            let j = *indices.get::<u32>(i) as usize;
+            let em = ems.get::<u32>(i);
+            let vm = feat_val_mask.get::<u32>(j);
+            
+            let p = gradients.sum_scaled_masked(i, vm & em);
+            sum += p.0;
+            count += p.1;
+        }
+
+        (sum, count as NumT)
+    }
+
     pub fn reset(&mut self) {
         self.tree = Tree::new(self.config.max_tree_depth);
         self.hist_store = HistStore::for_dataset(self.dataset);
+        self.index_store = BitBlockStore::new(1024);
+        self.mask_store = BitBlockStore::new(1024);
+        self.gradient_store = BitBlockStore::new(1024 * self.bitslice_info.width());
     }
 
     pub fn into_tree(self) -> Tree {
