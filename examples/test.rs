@@ -10,9 +10,6 @@ use spdyboost::dataset::Dataset;
 use spdyboost::tree::baseline_tree_learner::TreeLearner as BaselineLearner;
 use spdyboost::tree::bit_tree_learner::TreeLearner as BitTreeLearner;
 use spdyboost::tree::loss::{L2Loss, LossFunGrad};
-use spdyboost::bits::BitSliceLayout4;
-
-type TheBitTreeLearner<'a> = BitTreeLearner<'a, BitSliceLayout4>;
 
 pub fn main() -> Result<(), String> {
     pretty_env_logger::init();
@@ -35,7 +32,7 @@ pub fn main() -> Result<(), String> {
     let loss = L2Loss::new();
     let gradients = target.iter().map(|&v| loss.eval_grad(v, 0.0)).collect();
 
-    let mut learner = TheBitTreeLearner::new(&config, &dataset, gradients);
+    let mut learner = BitTreeLearner::new(&config, &dataset, gradients);
     //let mut learner = BaselineLearner::new(&config, &dataset, gradients);
 
     let r = 1;
@@ -54,14 +51,14 @@ pub fn main() -> Result<(), String> {
     println!("{:?}", tree);
 
     println!("writing results...");
-    write_results(&pred);
+    write_results(&pred).expect("writing failed");
     println!("done");
 
     Ok(())
 }
 
 use std::fs::File;
-use std::io::{Write, BufWriter, Error};
+use std::io::{Write, Error};
 
 fn write_results(res: &[NumT]) -> Result<(), Error> {
 

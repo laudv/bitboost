@@ -1,4 +1,4 @@
-use NumT;
+use crate::NumT;
 
 /// A template for loss functions
 pub trait LossFun {

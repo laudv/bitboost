@@ -1,12 +1,9 @@
 use log::debug;
 
-use NumT;
-use NomT;
-
-use tree::{Tree, SplitCrit};
-use config::Config;
-use dataset::{Dataset, FeatureRepr};
-
+use crate::{NumT, NomT};
+use crate::tree::{Tree, SplitCrit};
+use crate::config::Config;
+use crate::dataset::{Dataset, FeatureRepr};
 
 struct Node2Split<'a> {
     node_id: usize,

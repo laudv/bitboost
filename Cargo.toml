@@ -3,6 +3,7 @@ name = "spdyboost"
 version = "0.1.0"
 authors = ["Laurens Devos <laurens.devos@outlook.com>"]
 autobenches = false
+edition = "2018"
 
 [dependencies]
 num = "0.2"

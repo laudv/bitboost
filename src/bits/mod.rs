@@ -1,11 +1,11 @@
-mod simd;
+//mod simd;
 
-mod bitblock;
-mod bitvec;
-mod bitslice;
+pub mod bitblock;
+//mod bitvec;
+//mod bitslice;
 
 pub use self::bitblock::BitBlock;
-pub use self::bitvec::BitVec;
-pub use self::bitslice::{BitSlice};
-pub use self::bitslice::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2, BitSliceLayout4};
-pub use self::bitslice::{ScaledBitSlice};
+//pub use self::bitvec::BitVec;
+//pub use self::bitslice::{BitSlice};
+//pub use self::bitslice::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2, BitSliceLayout4};
+//pub use self::bitslice::{ScaledBitSlice};

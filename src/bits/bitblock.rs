@@ -207,6 +207,10 @@ impl <T: Integer> From<T> for BitBlock {
     }
 }
 
+impl Default for BitBlock {
+    fn default() -> Self { BitBlock::zeros() }
+}
+
 #[cfg(test)]
 mod test {
     use super::{BitBlock, BITBLOCK_BYTES};

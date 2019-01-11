@@ -6,11 +6,18 @@ use std::time::Instant;
 
 use log::{info, warn, debug};
 
-use NumT;
-use NomT;
+use crate::{NumT, NomT};
 
-use config::{Config, Learner};
-use bits::BitVec;
+use crate::bits::BitBlock;
+use crate::config::{Config, Learner};
+use crate::slice_store::{BitBlockStore, BitVecRef, BitVecMut, SliceRange};
+
+
+
+
+
+
+// - Feature --------------------------------------------------------------------------------------
 
 pub enum FeatureRepr {
 
@@ -18,7 +25,7 @@ pub enum FeatureRepr {
     CatFeature(usize, Vec<NomT>),
 
     /// Representation for cat. feature: each possible value has a bitvec.
-    BitVecFeature(Vec<BitVec>),
+    BitVecFeature(BitVecFeature),
 }
 
 pub struct Feature {
@@ -37,18 +44,6 @@ pub struct Feature {
     /// A representation used by the tree learner.
     repr: Option<FeatureRepr>,
 }
-
-pub struct Dataset {
-    nexamples: usize,
-    features: Vec<Feature>,
-    target: Feature,
-}
-
-
-
-
-
-// - Feature impl ---------------------------------------------------------------------------------
 
 impl Feature {
     fn new(colnum: usize, name: String, raw_data: Vec<NumT>) -> Feature {
@@ -105,16 +100,29 @@ impl Feature {
     pub fn add_bitvecs_repr(&mut self) {
         let nexamples = self.raw_data.len();
         let map = self.get_categories();
+        let card = map.len();
+        let nblocks = BitBlock::blocks_required_for(nexamples);
+        let mut store = BitBlockStore::new(card * nblocks);
 
-        let mut bitvecs = vec![BitVec::zero_bits(nexamples); map.len()];
+        let mut ranges = Vec::new();
+        for _ in 0..card {
+            ranges.push(store.alloc_zero_bits(nexamples));
+        }
+
+        let mut repr = BitVecFeature {
+            card: card,
+            ranges: ranges,
+            store: store,
+        };
+
         for (i, v) in self.raw_data.iter().enumerate() {
             let k = v.round() as i64;
-            let id = map[&k];
-            let bitvec = &mut bitvecs[id as usize];
+            let feat_val = map[&k];
+            let mut bitvec = repr.get_bitvec_mut(feat_val);
             bitvec.set_bit(i, true);
         }
 
-        self.repr = Some(FeatureRepr::BitVecFeature(bitvecs));
+        self.repr = Some(FeatureRepr::BitVecFeature(repr));
     }
 
     pub fn get_repr(&self) -> Option<&FeatureRepr> {
@@ -127,17 +135,43 @@ impl Feature {
         } else { None }
     }
 
-    pub fn get_bitvec(&self, feat_val: NomT) -> Option<&BitVec> {
-        if let Some(FeatureRepr::BitVecFeature(ref bitvecs)) = self.repr {
-            bitvecs.get(feat_val as usize)
+    pub fn get_bitvec(&self, feat_val: NomT) -> Option<BitVecRef> {
+        if let Some(FeatureRepr::BitVecFeature(ref f)) = self.repr {
+            Some(f.get_bitvec(feat_val))
         } else { None }
+    }
+}
+
+pub struct BitVecFeature {
+    pub card: usize,
+    ranges: Vec<SliceRange>,
+    store: BitBlockStore,
+}
+
+impl BitVecFeature {
+    pub fn get_bitvec(&self, feat_val: NomT) -> BitVecRef {
+        let range = self.ranges[feat_val as usize];
+        self.store.get_bitvec(range)
+    }
+
+    fn get_bitvec_mut(&mut self, feat_val: NomT) -> BitVecMut {
+        let range = self.ranges[feat_val as usize];
+        self.store.get_bitvec_mut(range)
     }
 }
 
 
 
 
-// - Dataset impl ---------------------------------------------------------------------------------
+
+
+// - Dataset --------------------------------------------------------------------------------------
+
+pub struct Dataset {
+    nexamples: usize,
+    features: Vec<Feature>,
+    target: Feature,
+}
 
 impl Dataset {
     pub fn from_csv_file(config: &Config, filename: &str) -> Result<Dataset, String> {
@@ -277,9 +311,10 @@ impl Dataset {
 
     pub fn get_cat_value(&self, feat_id: usize, example: usize) -> Option<NomT> {
         match self.get_feature(feat_id).get_repr() {
-            Some(&FeatureRepr::BitVecFeature(ref bitvecs)) => {
+            Some(&FeatureRepr::BitVecFeature(ref f)) => {
                 let mut ret = None;
-                for (i, bitvec) in bitvecs.iter().enumerate() {
+                for i in 0..f.card {
+                    let bitvec = f.get_bitvec(i as u16);
                     if bitvec.get_bit(example) { ret = Some(i as NomT); break; }
                 }
                 ret

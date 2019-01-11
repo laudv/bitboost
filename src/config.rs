@@ -1,4 +1,4 @@
-use NumT;
+use crate::NumT;
 
 pub enum Learner {
     Baseline,
@@ -23,6 +23,7 @@ pub struct Config {
     pub bagging_fraction: NumT,
     pub min_gain: NumT,
 
+    pub discr_bits: usize,
     pub discr_lo: NumT,
     pub discr_hi: NumT,
 }
@@ -42,8 +43,9 @@ impl Config {
             reg_lambda: 0.0,
             min_sum_hessian: 100.0,
             bagging_fraction: 1.0,
-            min_gain: 1e-5,
+            min_gain: 1e-3,
 
+            discr_bits: 4,
             discr_lo: -1.0,
             discr_hi: 1.0,
         }

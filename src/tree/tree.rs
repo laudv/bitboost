@@ -1,12 +1,8 @@
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
-use log::debug;
-
-use tree::loss::LossFun;
-use dataset::Dataset;
-
-use NumT;
-use NomT;
+use crate::{NumT, NomT};
+use crate::dataset::Dataset;
+use crate::tree::loss::LossFun;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SplitCrit {
@@ -154,7 +150,7 @@ impl Debug for Tree {
 
 #[cfg(test)]
 mod test {
-    use tree::Tree;
+    use crate::tree::Tree;
 
     #[test]
     fn test_tree() {
