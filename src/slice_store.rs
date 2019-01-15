@@ -97,7 +97,10 @@ where T: Clone {
             if r.1 - r.0 >= len {
                 debug!("Reusing slice! #free = {}", self.free.len());
                 self.free.swap_remove(i);
-                return (r.0, r.0 + len); // XXX information lost for next reuse!
+
+                // Re-initialize this, and return resized version
+                self.get_slice_mut(r).iter_mut().for_each(|x| *x = value.clone());
+                return (r.0, r.0 + len); // XXX actual length lost for next reuse!
             }
         }
 

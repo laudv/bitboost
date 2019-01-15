@@ -307,6 +307,8 @@ impl <'a> TreeLearner<'a, BSL> {
             let fmask = *fval_mask.get::<u32>(i as usize);
             let mask = pmask & f(fmask);
 
+            if child_id == 19 { println!("mask19 i={:3} {:032b} (i={})", j, mask, i); }
+
             if mask == 0 { zero_count += 1; }
 
             child_masks.set(j, mask);
@@ -317,8 +319,46 @@ impl <'a> TreeLearner<'a, BSL> {
         if zero_ratio > self.config.compression_threshold {
             debug!("N{:03}->N{:03} applying compression, #zero = {}/{} (ratio={:.2})",
                    parent_n2s.node_id, child_n2s.node_id, zero_count, n_u32, zero_ratio);
+
+            // DEBUG START ----
+            let old_mask_debug: Vec<u32> = child_masks.cast::<u32>().iter().cloned().collect();
+            let old_indices_debug: Vec<u32> = parent_indices.cast::<u32>().iter().cloned().collect();
+
+            for (i, (x, y)) in old_indices_debug.iter().zip(old_mask_debug.iter()).enumerate() {
+                println!("N{:03}->N{:03} {:3}: index {:3} - {:032b} {}",
+                   parent_n2s.node_id, child_n2s.node_id, i, x, y, if *y==0 { "zero" } else { "" });
+            }
+            // ----- DEBUG END
+
             let n_u32_child = n_u32 - zero_count;
             let child_n2s = self.compress_examples(parent_n2s, child_n2s, n_u32_child);
+
+            {
+                let idxsp = self.index_store.get_bitvec(parent_n2s.idx_range);
+                let idxsc = self.index_store.get_bitvec(child_n2s.idx_range);
+                let new_child_masks = self.mask_store.get_bitvec(child_n2s.mask_range);
+
+                let mut iuc = 0;
+                for ic in 0..n_u32_child {
+                    let jc = *idxsc.get::<u32>(ic);
+
+                    let mut juc = *idxsp.get::<u32>(iuc);
+                    while juc < jc {
+                        iuc += 1;
+                        juc = *idxsp.get::<u32>(iuc);
+                    }
+                    assert_eq!(jc, juc);
+
+                    //println!("N{:03} ic={} iuc={} j={}", child_id, ic, iuc, juc);
+                    //println!("mask_uc = {:032b}", old_mask_debug[iuc as usize]);
+                    //println!("mask_c  = {:032b}", *new_child_masks.get::<u32>(ic as usize));
+
+                    assert_eq!(old_mask_debug[iuc as usize], *new_child_masks.get::<u32>(ic as usize));
+
+                    iuc += 1;
+                }
+            }
+
             child_n2s
         } else {
             //debug!("N{:03}->N{:03} NOT applying compression, #zero = {}/{} (ratio={:.2})",
@@ -355,15 +395,24 @@ impl <'a> TreeLearner<'a, BSL> {
             child_n2s.grad_range);
 
         let mut k = 0; // child node index (compr)
+        let mut last_i = 0;
         for j in 0..n_u32_parent {
             debug_assert!(j >= k);
 
             let i = *parent_indices.get::<u32>(j); // j is parent index (compr), i is global index
 
+            // We keep indices stored in increasing order. If we encounter a lower i, then we must
+            // have reached the end of the indices (but not the end of the larger allocated block.
+            // The 'additional' indices should be zero.
+            //if last_i > i { debug_assert_eq!(0, i); break; }
+            //last_i = i;
+
             // in `split_examples`, we stored all zeros and used the parent indices `j`; copy this
             // to the smaller child indices `k` by skipping zero blocks:
             let mask = *child_masks.get::<u32>(j);
             if mask == 0 { continue; }
+
+            println!("not skipping i={}, j={}", i, j);
 
             child_masks.set::<u32>(k, mask);
             child_indices.set::<u32>(k, i);
@@ -372,6 +421,11 @@ impl <'a> TreeLearner<'a, BSL> {
         }
 
         debug_assert_eq!(k, n_u32_child);
+
+        // Zero the remaining blocks of child_masks: not doing this breaks things!
+        for j in n_u32_child..n_u32_parent {
+            child_masks.set::<u32>(j, 0);
+        }
 
         // Resize the masks, it has the size of the parent masks, but we've just compressed it
         let idx_len = child_n2s.idx_range.1 - child_n2s.idx_range.0;
