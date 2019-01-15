@@ -106,6 +106,7 @@ impl Tree {
         predictions
     }
 
+    // TODO implement 'Metric', separately from Loss
     pub fn evaluate<L>(&self, dataset: &Dataset, loss: &L) -> NumT
     where L: LossFun {
         let targets = dataset.target().get_raw_data();
@@ -117,7 +118,7 @@ impl Tree {
             l += loss.eval(y, yhat);
         }
 
-        l
+        l / dataset.nexamples() as NumT
     }
 }
 

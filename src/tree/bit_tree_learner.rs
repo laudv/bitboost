@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::ops::{Sub, Add};
 use std::time::Instant;
 
@@ -9,7 +10,7 @@ use crate::tree::{Tree, SplitCrit};
 use crate::dataset::{Dataset, FeatureRepr};
 use crate::slice_store::{SliceRange, HistStore, BitBlockStore};
 use crate::slice_store::{BitVecRef, BitVecMut, BitSliceRef, BitSliceMut};
-use crate::slice_store::{BitSliceInfo, BitSliceScaleInfo, BitSliceRuntimeInfo};
+use crate::slice_store::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2, BitSliceLayout4};
 
 struct Node2Split {
     /// The id of the node to split.
@@ -92,13 +93,11 @@ impl Add for HistVal {
     }
 }
 
-pub struct TreeLearner<'a, I>
-where I: 'a + BitSliceInfo + BitSliceScaleInfo {
+pub struct TreeLearner<'a, BSL> {
     config: &'a Config,
     dataset: &'a Dataset,
     gradients: Vec<NumT>,
     tree: Tree,
-    bitslice_info: I,
 
     /// Storage for histograms.
     hist_store: HistStore<HistVal>,
@@ -111,33 +110,34 @@ where I: 'a + BitSliceInfo + BitSliceScaleInfo {
 
     /// Store for gradients
     gradient_store: BitBlockStore,
+
+    /// Static info about the layout of the BitSlice.
+    _marker: PhantomData<BSL>,
 }
 
-impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
+type BSL = BitSliceLayout2;
+
+impl <'a> TreeLearner<'a, BSL> {
     pub fn new(config: &'a Config, data: &'a Dataset, gradients: Vec<NumT>) -> Self {
         let tree = Tree::new(config.max_tree_depth);
-
-        let bitslice_info = BitSliceRuntimeInfo::new(
-            config.discr_bits,
-            config.discr_lo,
-            config.discr_hi);
 
         let hist_store = HistStore::for_dataset(data);
         let index_store = BitBlockStore::new(1024);
         let mask_store = BitBlockStore::new(1024);
-        let gradient_store = BitBlockStore::new(1024 * bitslice_info.width());
+        let gradient_store = BitBlockStore::new(1024 * BSL::width());
 
         TreeLearner {
             config: config,
             dataset: data,
             gradients: gradients,
             tree: tree,
-            bitslice_info: bitslice_info,
 
             hist_store: hist_store,
             index_store: index_store,
             mask_store: mask_store,
             gradient_store: gradient_store,
+
+            _marker: PhantomData,
         }
     }
 
@@ -161,8 +161,6 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
             let split = split_opt.unwrap();
             let (feat_id, feat_val) = split.split_crit.unpack_eqtest().expect("not an EqTest");
 
-            //self.debug_print_split(&n2s, &split);
-
             // Enqueue children to be split if they are not leaves
             if !self.tree.is_max_leaf_node(self.tree.left_child(node_id)) {
                 let val_masks = self.dataset.features()[feat_id].get_bitvec(feat_val).unwrap();
@@ -178,8 +176,10 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
             let right_value = self.get_best_value(split.right_grad_sum, split.right_hess_sum);
             self.tree.split_node(node_id, split.split_crit, left_value, right_value);
 
-            // Free histogram of node that was just split
+            // Free histograms and masks for node that was just split
+            // We can't free indices/gradients, as they can be shared between nodes
             self.hist_store.free_hists(n2s.hists_range);
+            self.mask_store.free_blocks(n2s.mask_range);
         }
     }
 
@@ -230,16 +230,16 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
     fn get_root_node2split(&mut self) -> Node2Split {
         // TODO bagging - reservoir sampling
         let nexamples  = self.dataset.nexamples();
-        let grad_range = self.gradient_store.alloc_zero_bitslice(nexamples, &self.bitslice_info);
+        let grad_range = self.gradient_store.alloc_zero_bitslice::<BSL>(nexamples);
         let mask_range = self.mask_store.alloc_one_bits(nexamples);
         let nblocks    = self.mask_store.get_bitvec(mask_range).block_len::<u32>();
         let idx_range  = self.index_store.alloc_from_iter::<u32, _>(nblocks, 0..nblocks as u32);
 
         // Put target gradient values in slice
         {
-            let mut slice = self.gradient_store.get_bitslice_mut(grad_range, &self.bitslice_info);
+            let mut slice = self.gradient_store.get_bitslice_mut::<BSL>(grad_range);
             for (i, &v) in self.gradients.iter().enumerate() {
-                slice.set_scaled_value(i, v);
+                slice.set_scaled_value(i, v, self.config.discr_bounds);
             }
         }
 
@@ -309,6 +309,13 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
         child_n2s
     }
 
+    fn split_examples_compr<F>(&mut self, parent_n2s: &Node2Split, child_id: usize,
+                               fval_mask: &BitVecRef, f: F) -> Node2Split
+    where F: Fn(u32) -> u32
+    {
+        unimplemented!()
+    }
+
     fn build_histograms(&mut self, n2s: &Node2Split) {
         for feature in self.dataset.features() {
             match feature.get_repr() {
@@ -352,7 +359,9 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
 
         //let res = self.get_grad_and_hess_sums_naive(n2s, feat_val_mask);
         //let res = self.get_grad_and_hess_sums_uncompr(n2s, feat_val_mask);
-        let res = self.get_grad_and_hess_sums_compr(n2s, feat_val_mask);
+        //let res = self.get_grad_and_hess_sums_compr(n2s, feat_val_mask);
+        let res = self.get_grad_and_hess_sums_simd_uncompr(n2s, feat_val_mask);
+        //let res = self.get_grad_and_hess_sums_simd_compr(n2s, feat_val_mask);
 
         //let dur = start.elapsed();
         //println!("sum time: {} ns", dur.subsec_nanos() as f32);
@@ -369,7 +378,7 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
         let vms = feat_val_mask.cast::<u32>(); // feature value mask
         let ems = ems_bitset.cast::<u32>(); // example mask
         let indices = idx_bitset.cast::<u32>();
-        let gradients = self.gradient_store.get_bitslice(n2s.grad_range, &self.bitslice_info);
+        let gradients = self.gradient_store.get_bitslice::<BSL>(n2s.grad_range);
 
         let mut count = 0;
         let mut sum = 0.0;
@@ -384,7 +393,7 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
 
             for k in 0..32 {
                 if m >> k & 0x1 == 0x1 {
-                    sum1 += gradients.get_scaled_value(i*32 + k);
+                    sum1 += gradients.get_scaled_value(i*32 + k, self.config.discr_bounds);
                     count1 += 1;
                 }
             }
@@ -400,7 +409,7 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
         -> (NumT, NumT)
     {
         let ems = self.mask_store.get_bitvec(n2s.mask_range);
-        let gradients = self.gradient_store.get_bitslice(n2s.grad_range, &self.bitslice_info);
+        let gradients = self.gradient_store.get_bitslice::<BSL>(n2s.grad_range);
         let n_u32 = ems.block_len::<u32>();
 
         let mut count = 0;
@@ -410,7 +419,7 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
             let em = ems.get::<u32>(i);
             let vm = feat_val_mask.get::<u32>(i);
             
-            let p = gradients.sum_scaled_masked(i, vm & em);
+            let p = gradients.sum_scaled_masked(i, vm & em, self.config.discr_bounds);
             sum += p.0;
             count += p.1;
         }
@@ -422,7 +431,7 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
         -> (NumT, NumT)
     {
         let ems = self.mask_store.get_bitvec(n2s.mask_range);
-        let gradients = self.gradient_store.get_bitslice(n2s.grad_range, &self.bitslice_info);
+        let gradients = self.gradient_store.get_bitslice::<BSL>(n2s.grad_range);
         let indices = self.index_store.get_bitvec(n2s.idx_range);
         let n_u32 = indices.block_len::<u32>();
 
@@ -434,7 +443,7 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
             let em = ems.get::<u32>(i);
             let vm = feat_val_mask.get::<u32>(j);
             
-            let p = gradients.sum_scaled_masked(i, vm & em);
+            let p = gradients.sum_scaled_masked(i, vm & em, self.config.discr_bounds);
             sum += p.0;
             count += p.1;
         }
@@ -442,20 +451,55 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
         (sum, count as NumT)
     }
 
+    fn get_grad_and_hess_sums_simd_uncompr(&self, n2s: &Node2Split, featval_mask: BitVecRef)
+        -> (NumT, NumT)
+    {
+        let ems = self.mask_store.get_bitvec(n2s.mask_range);
+        let gradients = self.gradient_store.get_bitslice::<BSL>(n2s.grad_range);
+
+        let count = ems.count_ones_and(&featval_mask) as NumT;
+        let hess = count; // TODO for now...
+
+        //if hess < min_hess || (n2s.hess_sum - hess) < min_hess { return (0.0, 0.0); }
+        let sum = unsafe { gradients.sum_all_masked2_unsafe(&ems, &featval_mask) };
+        let sum = BSL::linproj(sum as NumT, count, self.config.discr_bounds);
+
+        (sum, hess)
+    }
+
+    fn get_grad_and_hess_sums_simd_compr(&self, n2s: &Node2Split, featval_mask: BitVecRef)
+        -> (NumT, NumT)
+    {
+        let ems = self.mask_store.get_bitvec(n2s.mask_range);
+        let gradients = self.gradient_store.get_bitslice::<BSL>(n2s.grad_range);
+        let indices = self.index_store.get_bitvec(n2s.idx_range);
+
+        let count = unsafe { ems.count_ones_and_compr_unsafe(&indices, &featval_mask) as NumT };
+        let hess = count; // TODO for now
+
+        //if hess < min_hess || (n2s.hess_sum - hess) < min_hess { return (0.0, 0.0); }
+        let sum = unsafe { gradients.sum_all_masked2_compr_unsafe(&indices, &ems, &featval_mask) };
+        let sum = BSL::linproj(sum as NumT, count, self.config.discr_bounds);
+
+        (sum, hess)
+    }
+
     pub fn reset(&mut self) {
         self.tree = Tree::new(self.config.max_tree_depth);
         self.hist_store = HistStore::for_dataset(self.dataset);
         self.index_store = BitBlockStore::new(1024);
         self.mask_store = BitBlockStore::new(1024);
-        self.gradient_store = BitBlockStore::new(1024 * self.bitslice_info.width());
+        self.gradient_store = BitBlockStore::new(1024 * BSL::width());
     }
 
     pub fn into_tree(self) -> Tree {
         self.tree
     }
 
+    #[allow(dead_code)]
     fn debug_print_split(&self, n2s: &Node2Split, split: &Split) {
         let nid = n2s.node_id;
+        let bounds = self.config.discr_bounds;
         let (feat_id, feat_val) = split.split_crit.unpack_eqtest().unwrap();
 
         let ems_bitset = self.mask_store.get_bitvec(n2s.mask_range);
@@ -463,7 +507,7 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
 
         let ems = ems_bitset.cast::<u32>(); // example mask
         let indices = idx_bitset.cast::<u32>();
-        let gradients = self.gradient_store.get_bitslice(n2s.grad_range, &self.bitslice_info);
+        let gradients = self.gradient_store.get_bitslice::<BSL>(n2s.grad_range);
         let column = self.dataset.features()[feat_id].get_raw_data();
         let feat_val_mask = self.dataset.features()[feat_id].get_bitvec(feat_val).unwrap();
 
@@ -492,9 +536,9 @@ impl <'a> TreeLearner<'a, BitSliceRuntimeInfo> {
                 println!("{:6} {:6} {:8.3} {:8.3} {:6.1} {:4} {:>4}",
                          i,
                          x,
-                         gradients.get_scaled_value(y),
+                         gradients.get_scaled_value(y, bounds),
                          self.gradients[x],
-                         (self.gradients[x] - gradients.get_scaled_value(y)).abs().log10(),
+                         (self.gradients[x] - gradients.get_scaled_value(y, bounds)).abs().log10(),
                          column[x],
                          if feat_val_mask.get_bit(x) { "L " } else { " R" });
             }

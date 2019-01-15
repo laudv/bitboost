@@ -19,8 +19,7 @@ pub fn main() -> Result<(), String> {
     config.categorical_columns = (0..256).collect();
     config.max_tree_depth = 6;
     config.min_sum_hessian = 1.0;
-    config.discr_lo = -1.0;
-    config.discr_hi = 1.0;
+    config.discr_bounds = (-1.0, 1.0);
     //config.learner = Learner::Baseline;
     config.learner = Learner::BitLearner;
 
@@ -35,7 +34,7 @@ pub fn main() -> Result<(), String> {
     let mut learner = BitTreeLearner::new(&config, &dataset, gradients);
     //let mut learner = BaselineLearner::new(&config, &dataset, gradients);
 
-    let r = 10;
+    let r = 20;
     let now = Instant::now();
     for _ in 0..r { learner.reset(); learner.train(); }
     let elapsed = now.elapsed();

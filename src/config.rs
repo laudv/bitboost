@@ -24,8 +24,7 @@ pub struct Config {
     pub min_gain: NumT,
 
     pub discr_bits: usize,
-    pub discr_lo: NumT,
-    pub discr_hi: NumT,
+    pub discr_bounds: (NumT, NumT),
 }
 
 impl Config {
@@ -46,8 +45,7 @@ impl Config {
             min_gain: 1e-3,
 
             discr_bits: 4,
-            discr_lo: -1.0,
-            discr_hi: 1.0,
+            discr_bounds: (-1.0, 1.0),
         }
     }
 }
