@@ -1,14 +1,14 @@
 use crate::NumT;
 use crate::config::Config;
 use crate::dataset::Dataset;
+use crate::tree::Tree;
+use crate::tree::bit_tree_learner::TreeLearner;
 
 pub struct Booster<'a> {
     config: &'a Config,
     dataset: &'a Dataset,
 
     predictions: Vec<NumT>,
-
-    
 }
 
 impl <'a> Booster<'a> {
@@ -22,5 +22,7 @@ impl <'a> Booster<'a> {
         }
     }
 
-    pub fn train(&self)
+    pub fn train(&self) {
+
+    }
 }

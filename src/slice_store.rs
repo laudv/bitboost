@@ -11,8 +11,7 @@ use num::Integer;
 use log::debug;
 
 use crate::NumT;
-use crate::bits::{BitBlock};
-use crate::bits::bitblock::{get_bit, set_bit, get_bitpos, get_blockpos};
+use crate::bitblock::{BitBlock, get_bit, set_bit, get_bitpos, get_blockpos};
 use crate::dataset::{Dataset, FeatureRepr};
 use crate::simd;
 
@@ -724,7 +723,7 @@ bitslice_info!(BitSliceLayout4, 4);
 #[cfg(test)]
 mod test {
     use crate::NumT;
-    use crate::bits::BitBlock;
+    use crate::bitblock::BitBlock;
     use crate::slice_store::{SliceStore, HistStore, BitBlockStore};
     use crate::slice_store::{BitSliceLayout};
     use crate::slice_store::{BitSliceLayout1, BitSliceLayout2, BitSliceLayout4};
@@ -1142,7 +1141,7 @@ mod test {
 
     #[test]
     fn bitvec_count_ones_and_compr() {
-        use crate::bits::bitblock::get_bit;
+        use crate::bitblock::get_bit;
 
         let n = 10_000;
         let mut all_equal = true;

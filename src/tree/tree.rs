@@ -149,6 +149,36 @@ impl Debug for Tree {
     }
 }
 
+
+
+
+// ------------------------------------------------------------------------------------------------
+
+pub struct AdditiveTree {
+    trees: Vec<Tree>,
+}
+
+impl AdditiveTree {
+    pub fn new() -> AdditiveTree {
+        AdditiveTree {
+            trees: Vec::new(),
+        }
+    }
+
+    pub fn predict(&self, data: &Dataset, results: &mut Vec<NumT>) {
+        unimplemented!()
+    }
+}
+
+
+
+
+
+
+
+
+// ------------------------------------------------------------------------------------------------
+
 #[cfg(test)]
 mod test {
     use crate::tree::Tree;

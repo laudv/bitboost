@@ -1,7 +1,7 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-use crate::bits::BitBlock;
+use crate::bitblock::BitBlock;
 
 // get_grad_and_hess_sums
 //   - uncompressed / compresed

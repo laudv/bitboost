@@ -12,7 +12,7 @@ pub type NomT = u16; // nominal type
 
 pub mod config;
 pub mod dataset;
-pub mod bits;
+pub mod bitblock;
 pub mod simd;
 pub mod slice_store;
 pub mod tree;

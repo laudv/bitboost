@@ -8,7 +8,7 @@ use log::{info, warn, debug};
 
 use crate::{NumT, NomT};
 
-use crate::bits::BitBlock;
+use crate::bitblock::BitBlock;
 use crate::config::{Config, Learner};
 use crate::slice_store::{BitBlockStore, BitVecRef, BitVecMut, SliceRange};
 
