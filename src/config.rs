@@ -25,6 +25,10 @@ pub struct Config {
 
     pub discr_bits: usize,
     pub discr_bounds: (NumT, NumT),
+
+    /// A threshold for the ratio #zero-block / #blocks; if ratio > threshold, then apply
+    /// compression. Disable by setting to 1.0 or higher.
+    pub compression_threshold: NumT,
 }
 
 impl Config {
@@ -46,6 +50,8 @@ impl Config {
 
             discr_bits: 4,
             discr_bounds: (-1.0, 1.0),
+
+            compression_threshold: 0.1,
         }
     }
 }

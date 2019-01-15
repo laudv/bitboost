@@ -1,6 +1,8 @@
 use std::marker::PhantomData;
 use std::ops::{Sub, Add};
 use std::time::Instant;
+use std::mem::size_of;
+
 
 use log::debug;
 
@@ -19,6 +21,8 @@ struct Node2Split {
     /// Cache grad_sum and hess_sum to compute right stats given left stats.
     grad_sum: NumT,
     hess_sum: NumT,
+
+    compressed: bool,
 
     /// Range to lookup histograms in hist_store
     hists_range: SliceRange,
@@ -40,6 +44,7 @@ impl Node2Split {
             node_id: node_id,
             grad_sum: 0.0,
             hess_sum: 0.0,
+            compressed: false,
             hists_range: hist_store.alloc_hists(),
             idx_range: (0, 0),
             mask_range: (0, 0),
@@ -115,7 +120,7 @@ pub struct TreeLearner<'a, BSL> {
     _marker: PhantomData<BSL>,
 }
 
-type BSL = BitSliceLayout2;
+type BSL = BitSliceLayout4;
 
 impl <'a> TreeLearner<'a, BSL> {
     pub fn new(config: &'a Config, data: &'a Dataset, gradients: Vec<NumT>) -> Self {
@@ -160,6 +165,8 @@ impl <'a> TreeLearner<'a, BSL> {
 
             let split = split_opt.unwrap();
             let (feat_id, feat_val) = split.split_crit.unpack_eqtest().expect("not an EqTest");
+
+            //self.debug_print_split(&n2s, &split);
 
             // Enqueue children to be split if they are not leaves
             if !self.tree.is_max_leaf_node(self.tree.left_child(node_id)) {
@@ -284,6 +291,7 @@ impl <'a> TreeLearner<'a, BSL> {
         let n_u32 = parent_indices.block_len::<u32>();
 
         let mut child_n2s = Node2Split::new(child_id, &mut self.hist_store);
+        child_n2s.compressed = parent_n2s.compressed; // child is compr if parent is compr
         child_n2s.idx_range = parent_n2s.idx_range;
         child_n2s.grad_range = parent_n2s.grad_range;
         child_n2s.mask_range = self.mask_store.alloc_zero_blocks(nblocks);
@@ -297,23 +305,88 @@ impl <'a> TreeLearner<'a, BSL> {
             let i = *parent_indices.get::<u32>(j); // j is node index (compr), i is global index
             let pmask = *parent_masks.get::<u32>(j);
             let fmask = *fval_mask.get::<u32>(i as usize);
-
             let mask = pmask & f(fmask);
+
             if mask == 0 { zero_count += 1; }
 
             child_masks.set(j, mask);
         }
 
-        debug!("N{:03}: zero block count {} / {}", child_id, zero_count, n_u32);
-        
-        child_n2s
+        // We encountered enough zero blocks to apply compression
+        let zero_ratio = zero_count as NumT / n_u32 as NumT;
+        if zero_ratio > self.config.compression_threshold {
+            debug!("N{:03}->N{:03} applying compression, #zero = {}/{} (ratio={:.2})",
+                   parent_n2s.node_id, child_n2s.node_id, zero_count, n_u32, zero_ratio);
+            let n_u32_child = n_u32 - zero_count;
+            let child_n2s = self.compress_examples(parent_n2s, child_n2s, n_u32_child);
+            child_n2s
+        } else {
+            //debug!("N{:03}->N{:03} NOT applying compression, #zero = {}/{} (ratio={:.2})",
+            //       parent_n2s.node_id, child_n2s.node_id, zero_count, n_u32, zero_ratio);
+            child_n2s
+        }
     }
 
-    fn split_examples_compr<F>(&mut self, parent_n2s: &Node2Split, child_id: usize,
-                               fval_mask: &BitVecRef, f: F) -> Node2Split
-    where F: Fn(u32) -> u32
+    fn compress_examples(&mut self, parent_n2s: &Node2Split, mut child_n2s: Node2Split,
+                         n_u32_child: usize) -> Node2Split
     {
-        unimplemented!()
+        // This will become a compressed node
+        child_n2s.compressed = true;
+
+        let grad_sum_before = {
+            let grads = self.gradient_store.get_bitslice::<BSL>(child_n2s.grad_range);
+            let masks = self.mask_store.get_bitvec(child_n2s.mask_range);
+            grads.sum_all_masked2(&masks, &masks)
+        };
+
+        // Allocate space for indices, gradients for child (reuse masks from `split_examples`)
+        let nvalues = n_u32_child * size_of::<u32>() * 8;
+        child_n2s.idx_range = self.index_store.alloc_zero_bits(nvalues);
+        child_n2s.grad_range = self.gradient_store.alloc_zero_bitslice::<BSL>(nvalues);
+
+        // Get references to the structures
+        let (parent_indices, mut child_indices) = self.index_store.get_two_bitvecs_mut(
+            parent_n2s.idx_range,
+            child_n2s.idx_range);
+        let n_u32_parent = parent_indices.block_len::<u32>();
+        let mut child_masks = self.mask_store.get_bitvec_mut(child_n2s.mask_range);
+        let (parent_grads, mut child_grads) = self.gradient_store.get_two_bitslices_mut::<BSL>(
+            parent_n2s.grad_range,
+            child_n2s.grad_range);
+
+        let mut k = 0; // child node index (compr)
+        for j in 0..n_u32_parent {
+            debug_assert!(j >= k);
+
+            let i = *parent_indices.get::<u32>(j); // j is parent index (compr), i is global index
+
+            // in `split_examples`, we stored all zeros and used the parent indices `j`; copy this
+            // to the smaller child indices `k` by skipping zero blocks:
+            let mask = *child_masks.get::<u32>(j);
+            if mask == 0 { continue; }
+
+            child_masks.set::<u32>(k, mask);
+            child_indices.set::<u32>(k, i);
+            child_grads.copy_block_from::<u32, _>(&parent_grads, j, k); // from=j, to=k
+            k += 1;
+        }
+
+        debug_assert_eq!(k, n_u32_child);
+
+        // Resize the masks, it has the size of the parent masks, but we've just compressed it
+        let idx_len = child_n2s.idx_range.1 - child_n2s.idx_range.0;
+        child_n2s.mask_range = (child_n2s.mask_range.0, child_n2s.mask_range.0 + idx_len);
+
+        let grad_sum_after = {
+            let grads = self.gradient_store.get_bitslice::<BSL>(child_n2s.grad_range);
+            let masks = self.mask_store.get_bitvec(child_n2s.mask_range);
+            grads.sum_all_masked2(&masks, &masks)
+        };
+
+        println!("grad_sums: {} - {}", grad_sum_before, grad_sum_after);
+        assert_eq!(grad_sum_before, grad_sum_after);
+
+        child_n2s
     }
 
     fn build_histograms(&mut self, n2s: &Node2Split) {
@@ -355,16 +428,27 @@ impl <'a> TreeLearner<'a, BSL> {
 
     /// OPTIMIZE THIS
     fn get_grad_and_hess_sums(&self, n2s: &Node2Split, feat_val_mask: BitVecRef) -> (NumT, NumT) {
-        //let start = Instant::now();
+        //println!("idx: {:?}", n2s.idx_range);
+        //println!("grad: {:?}", n2s.grad_range);
+        //println!("mask: {:?}", n2s.mask_range);
 
-        //let res = self.get_grad_and_hess_sums_naive(n2s, feat_val_mask);
-        //let res = self.get_grad_and_hess_sums_uncompr(n2s, feat_val_mask);
-        //let res = self.get_grad_and_hess_sums_compr(n2s, feat_val_mask);
-        let res = self.get_grad_and_hess_sums_simd_uncompr(n2s, feat_val_mask);
-        //let res = self.get_grad_and_hess_sums_simd_compr(n2s, feat_val_mask);
+        // naive method 1: per individual example
+        let res = self.get_grad_and_hess_sums_naive(n2s, feat_val_mask);
 
-        //let dur = start.elapsed();
-        //println!("sum time: {} ns", dur.subsec_nanos() as f32);
+        //// naive method 2: per u32 block
+        //let res = if !n2s.compressed {
+        //    self.get_grad_and_hess_sums_uncompr(n2s, feat_val_mask)
+        //} else {
+        //    debug!("N{:03} compressed sum", n2s.node_id);
+        //    self.get_grad_and_hess_sums_compr(n2s, feat_val_mask)
+        //};
+        
+        //// method 3: SIMD streaming
+        //let res = if !n2s.compressed {
+        //    self.get_grad_and_hess_sums_simd_uncompr(n2s, feat_val_mask)
+        //} else {
+        //    self.get_grad_and_hess_sums_simd_compr(n2s, feat_val_mask)
+        //};
 
         res
     }

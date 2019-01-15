@@ -19,8 +19,8 @@ use crate::simd;
 pub type SliceRange = (u32, u32);
 pub type BitVecRef<'a> = BitVec<&'a [BitBlock]>;
 pub type BitVecMut<'a> = BitVec<&'a mut [BitBlock]>;
-pub type BitSliceRef<'a, I> = BitSlice<&'a [BitBlock], I>;
-pub type BitSliceMut<'a, I> = BitSlice<&'a mut [BitBlock], I>;
+pub type BitSliceRef<'a, L> = BitSlice<&'a [BitBlock], L>;
+pub type BitSliceMut<'a, L> = BitSlice<&'a mut [BitBlock], L>;
 
 pub struct SliceStore<T>
 where T: Clone {
@@ -97,7 +97,7 @@ where T: Clone {
             if r.1 - r.0 >= len {
                 debug!("Reusing slice! #free = {}", self.free.len());
                 self.free.swap_remove(i);
-                return r;
+                return (r.0, r.0 + len); // XXX information lost for next reuse!
             }
         }
 
@@ -351,10 +351,7 @@ impl BitBlockStore {
     where L: 'a + BitSliceLayout
     {
         debug_assert!((range.1 - range.0) as usize % L::width() == 0);
-        BitSlice {
-            vec: self.get_bitvec(range),
-            _marker: PhantomData,
-        }
+        BitSlice::new(self.get_bitvec(range))
     }
 
     pub fn get_bitslice_mut<'a, L>(&'a mut self, range: SliceRange)
@@ -362,10 +359,15 @@ impl BitBlockStore {
     where L: 'a + BitSliceLayout
     {
         debug_assert!((range.1 - range.0) as usize % L::width() == 0);
-        BitSlice {
-            vec: self.get_bitvec_mut(range),
-            _marker: PhantomData,
-        }
+        BitSlice::new(self.get_bitvec_mut(range))
+    }
+
+    pub fn get_two_bitslices_mut<'a, L>(&'a mut self, r1: SliceRange, r2: SliceRange)
+        -> (BitSliceMut<'a, L>, BitSliceMut<'a, L>)
+    where L: 'a + BitSliceLayout
+    {
+        let (v1, v2) = self.get_two_bitvecs_mut(r1, r2);
+        (BitSlice::new(v1), BitSlice::new(v2))
     }
 }
 
@@ -489,7 +491,14 @@ where B: Borrow<[BitBlock]>,
 
 impl <B, L> BitSlice<B, L>
 where B: Borrow<[BitBlock]>,
-      L: BitSliceLayout {
+      L: BitSliceLayout
+{
+    fn new(vec: BitVec<B>) -> BitSlice<B, L> {
+        BitSlice {
+            vec: vec,
+            _marker: PhantomData,
+        }
+    }
 
     ///            --- 256 bit --- | --- 256 bit --- | ...
     /// width=1: [ 1 1 1 1 1 1 1 1 | 1 1 1 1 1 1 1 1 | ... ]
@@ -571,6 +580,30 @@ where B: Borrow<[BitBlock]>,
         let v2 = v1.round() as u8;
         //println!("{}, {}", x, v2);
         self.set_value(index, v2);
+    }
+
+    pub fn copy_block_from<I, BO>(&mut self, other: &BitSlice<BO, L>, from: usize, to: usize)
+    where B: BorrowMut<[BitBlock]>,
+          I: Integer,
+          BO: Borrow<[BitBlock]>,
+    {
+        assert!(from < other.vec.block_len::<u32>() / L::width());
+        assert!(to < self.vec.block_len::<u32>() / L::width());
+
+        let (from_sb, from_i) = Self::get_indices(from);
+        let (to_sb, to_i) = Self::get_indices(to);
+        let from_base = other.vec.as_ptr() as *const u32;
+        let to_base = self.vec.as_mut_ptr() as *mut u32;
+
+        for k in 0..L::width() {
+            let from_l = Self::bitslice_blockpos_u32(from_sb, from_i, k);
+            let to_l = Self::bitslice_blockpos_u32(to_sb, to_i, k);
+
+            unsafe { // should be safe because asserts
+                let from_block = *from_base.add(from_l);
+                *to_base.add(to_l) = from_block;
+            }
+        }
     }
 
     pub unsafe fn sum_masked_unsafe(&self, index: usize, mask: u32) -> u32 {
