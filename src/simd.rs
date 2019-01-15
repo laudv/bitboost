@@ -296,7 +296,7 @@ unsafe fn reduce64_4(total: __m256i) -> u64 { reduce_64(total, 1, 2, 4, 8) }
 
 // btslce -> bitslice
 // summx -> sum masked, width=x
-// nc   -> not compressed
+// uc   -> uncompressed
 // c    -> compressed
 
 pub unsafe fn bitvec_count_and_uc(v1: &[BitBlock], v2: &[BitBlock]) -> u64 {
@@ -314,7 +314,7 @@ pub unsafe fn bitvec_count_and_c(v1: &[BitBlock], idxs: &[BitBlock], v2: &[BitBl
     harvey_seal_64!((ptr1, ptr2, ptr3), nblocks, load_and_c, reduce64_1)
 }
 
-pub unsafe fn btslce_summ1_nc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBlock]) -> u64 {
+pub unsafe fn btslce_summ1_uc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBlock]) -> u64 {
     let nblocks = slice.len();
     debug_assert_eq!(nm.len(), nblocks);
     debug_assert_eq!(fm.len(), nblocks);
@@ -326,7 +326,7 @@ pub unsafe fn btslce_summ1_nc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBloc
     harvey_seal_64!((ptr1, ptr2, ptr3), nblocks, load_mask_and_u32_w1_uc, reduce64_1)
 }
 
-pub unsafe fn btslce_summ2_nc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBlock]) -> u64 {
+pub unsafe fn btslce_summ2_uc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBlock]) -> u64 {
     let nblocks = slice.len();
     debug_assert_eq!(nm.len() * 2, nblocks);
     debug_assert_eq!(fm.len() * 2, nblocks);
@@ -338,7 +338,7 @@ pub unsafe fn btslce_summ2_nc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBloc
     harvey_seal_64!((ptr1, ptr2, ptr3), nblocks, load_mask_and_u32_w2_uc, reduce64_2)
 }
 
-pub unsafe fn btslce_summ4_nc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBlock]) -> u64 {
+pub unsafe fn btslce_summ4_uc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBlock]) -> u64 {
     let nblocks = slice.len();
     debug_assert_eq!(nm.len() * 4, nblocks);
     debug_assert_eq!(fm.len() * 4, nblocks);

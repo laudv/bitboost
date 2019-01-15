@@ -120,7 +120,7 @@ pub struct TreeLearner<'a, BSL> {
     _marker: PhantomData<BSL>,
 }
 
-type BSL = BitSliceLayout4;
+type BSL = BitSliceLayout1;
 
 impl <'a> TreeLearner<'a, BSL> {
     pub fn new(config: &'a Config, data: &'a Dataset, gradients: Vec<NumT>) -> Self {

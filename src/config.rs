@@ -51,7 +51,7 @@ impl Config {
             discr_bits: 4,
             discr_bounds: (-1.0, 1.0),
 
-            compression_threshold: 0.1,
+            compression_threshold: 0.75,
         }
     }
 }

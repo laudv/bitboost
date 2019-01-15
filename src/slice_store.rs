@@ -649,10 +649,10 @@ where B: Borrow<[BitBlock]>,
 
     pub unsafe fn sum_all_masked2_unsafe(&self, nm: &BitVecRef, fm: &BitVecRef) -> u64 {
         let fs: [unsafe fn(&[BitBlock], &[BitBlock], &[BitBlock]) -> u64; 4] = [
-            simd::btslce_summ1_nc,
-            simd::btslce_summ2_nc,
-            simd::btslce_summ1_nc, // invalid
-            simd::btslce_summ4_nc];
+            simd::btslce_summ1_uc,
+            simd::btslce_summ2_uc,
+            simd::btslce_summ1_uc, // invalid
+            simd::btslce_summ4_uc];
 
         let f = fs[L::width() - 1];
         f(self, nm, fm)

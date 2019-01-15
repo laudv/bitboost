@@ -65,7 +65,7 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
             node_ids.append(2 * node_id + 1)
         else:
             #leaf_value = np.random.rand()
-            leaf_value = random.choice(output_values2)
+            leaf_value = random.choice(output_values1)
             print(" LEAF: node_id {} value {}".format(node_id, leaf_value))
             output[examples] = leaf_value
 
@@ -83,7 +83,7 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
 if __name__ == "__main__":
     seed = 12
     n = 100000
-    attr = 16
+    attr = 64
     max_depth = 4
     card_range = [4, 5]
     compression = False

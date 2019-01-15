@@ -16,3 +16,4 @@ pub mod bits;
 pub mod simd;
 pub mod slice_store;
 pub mod tree;
+pub mod booster;
