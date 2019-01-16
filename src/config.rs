@@ -23,7 +23,7 @@ pub struct Config {
     pub bagging_fraction: NumT,
     pub min_gain: NumT,
 
-    pub discr_bits: usize,
+    pub discr_nbits: usize,
     pub discr_bounds: (NumT, NumT),
 
     /// A threshold for the ratio #zero-block / #blocks; if ratio > threshold, then apply
@@ -48,7 +48,7 @@ impl Config {
             bagging_fraction: 1.0,
             min_gain: 1e-3,
 
-            discr_bits: 4,
+            discr_nbits: 4,
             discr_bounds: (-1.0, 1.0),
 
             compression_threshold: 0.75,

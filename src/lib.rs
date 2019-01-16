@@ -16,4 +16,4 @@ pub mod bitblock;
 pub mod simd;
 pub mod slice_store;
 pub mod tree;
-pub mod booster;
+pub mod boost;
