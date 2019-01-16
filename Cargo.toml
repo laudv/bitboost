@@ -14,7 +14,7 @@ log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"
 #flate2 = "1.0.6"
 
 [dev-dependencies]
-criterion = "0.2"
+#criterion = "0.2"
 pretty_env_logger = "0.3.0" # examples
 
 [profile.release]
@@ -22,9 +22,9 @@ opt-level = 3
 #lto = false
 debug = true
 
-[[bench]]
-name = "bitvec"
-harness = false
+#[[bench]]
+#name = "bitvec"
+#harness = false
 
 #[[bench]]
 #name = "bitslice"

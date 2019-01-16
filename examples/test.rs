@@ -19,8 +19,10 @@ pub fn main() -> Result<(), String> {
     config.categorical_columns = (0..256).collect();
     config.max_tree_depth = 6;
     config.min_sum_hessian = 1.0;
+    config.discr_nbits = 1;
     config.discr_bounds = (-1.0, 1.0);
     config.compression_threshold = 0.75;
+    //config.compression_threshold = 1.0;
     //config.learner = Learner::Baseline;
     config.learner = Learner::BitLearner;
 
