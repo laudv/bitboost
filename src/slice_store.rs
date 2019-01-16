@@ -94,7 +94,7 @@ where T: Clone {
         for i in 0..self.free.len() {
             let r = self.free[i];
             if r.1 - r.0 >= len {
-                debug!("Reusing slice! #free = {}", self.free.len());
+                //debug!("Reusing slice! #free = {}", self.free.len());
                 self.free.swap_remove(i);
 
                 // Re-initialize this, and return resized version

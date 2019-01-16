@@ -8,8 +8,9 @@ edition = "2018"
 [dependencies]
 num = "0.2"
 rand = "0.6.1"
+#rayon = "1.0.3"
 
-log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
 
 #flate2 = "1.0.6"
 

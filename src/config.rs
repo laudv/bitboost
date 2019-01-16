@@ -24,11 +24,15 @@ pub struct Config {
     pub min_gain: NumT,
 
     pub discr_nbits: usize,
-    pub discr_bounds: (NumT, NumT),
 
     /// A threshold for the ratio #zero-block / #blocks; if ratio > threshold, then apply
     /// compression. Disable by setting to 1.0 or higher.
     pub compression_threshold: NumT,
+
+
+    // Boosting
+    pub learning_rate: NumT,
+    pub niterations: usize,
 }
 
 impl Config {
@@ -44,14 +48,16 @@ impl Config {
             learner: Learner::BitLearner,
             max_tree_depth: 4,
             reg_lambda: 0.0,
-            min_sum_hessian: 100.0,
+            min_sum_hessian: 1.0,
             bagging_fraction: 1.0,
-            min_gain: 1e-3,
+            min_gain: 0.0,
 
             discr_nbits: 4,
-            discr_bounds: (-1.0, 1.0),
 
             compression_threshold: 0.75,
+
+            learning_rate: 0.1,
+            niterations: 100,
         }
     }
 }

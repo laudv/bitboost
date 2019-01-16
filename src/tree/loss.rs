@@ -4,7 +4,29 @@ use crate::NumT;
 pub trait LossFun {
     /// Evaluate the loss function.
     fn eval(&self, target_value: NumT, predicted_value: NumT) -> NumT;
-    fn name() -> &'static str;
+    fn lossfun_name<'a>(&'a self) -> &'a str;
+
+    /// Get the optimal minimal and maximal value to consider, and the bias for this loss function
+    /// given these (target, predicted) values. The output is (min, max, bias)
+    fn boost_stats<I>(&self, mut iter: I) -> (NumT, NumT, NumT)
+    where I: Iterator<Item=(NumT, NumT)> { 
+        let mut count = 0;
+        let mut min = 1.0/0.0;
+        let mut max = -1.0/0.0;
+        let mut sum = 0.0;
+        while let Some((t, p)) = iter.next() {
+            let err = t - p;
+            min = NumT::min(min, err);
+            max = NumT::max(max, err);
+            sum += err;
+            count += 1;
+        }
+        let range = max - min;
+        let min = min - 0.1 * range;
+        let max = max + 0.1 * range;
+        let bias = sum / count as NumT; // mean
+        (min, max, bias)
+    }
 }
 
 /// A template for loss functions that have a first derivative
@@ -33,7 +55,7 @@ macro_rules! impl_eval {
     ($name:ident : $grad:expr) => {
         impl LossFun for $name {
             fn eval(&self, t: NumT, p: NumT) -> NumT { $grad(self, t, p) }
-            fn name() -> &'static str { stringify!($name) }
+            fn lossfun_name<'a>(&'a self) -> &'a str { stringify!($name) }
         }
     }
 }

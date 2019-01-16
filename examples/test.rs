@@ -1,6 +1,3 @@
-extern crate pretty_env_logger;
-extern crate spdyboost;
-
 use std::env;
 use std::time::Instant;
 
@@ -10,43 +7,50 @@ use spdyboost::dataset::Dataset;
 use spdyboost::tree::baseline_tree_learner::TreeLearner as BaselineLearner;
 use spdyboost::tree::bit_tree_learner::TreeLearner as BitTreeLearner;
 use spdyboost::tree::loss::{L2Loss, LossFunGrad};
+use spdyboost::tree::eval::Evaluator;
 
-pub fn main() -> Result<(), String> {
+pub fn main() {
     pretty_env_logger::init();
 
     let mut config = Config::new();
     config.target_feature_id = -1;
     config.categorical_columns = (0..256).collect();
     config.max_tree_depth = 6;
-    config.min_sum_hessian = 1.0;
     config.discr_nbits = 1;
-    config.discr_bounds = (-1.0, 1.0);
     config.compression_threshold = 0.75;
     //config.compression_threshold = 1.0;
     //config.learner = Learner::Baseline;
     config.learner = Learner::BitLearner;
 
-    let args: Vec<String> = env::args().collect();
-    let filename = args.get(1).ok_or("no data file given")?;
+    let grad_bounds = (-1.0, 1.0);
 
-    let dataset = Dataset::from_csv_file(&config, filename)?;
+    let args: Vec<String> = env::args().collect();
+    let filename = args.get(1).expect("no data file given");
+
+    let dataset = Dataset::from_csv_file(&config, filename).expect("data error");
     let target = dataset.target().get_raw_data();
     let loss = L2Loss::new();
-    let gradients = target.iter().map(|&v| loss.eval_grad(v, 0.0)).collect();
+    let gradients: Vec<NumT> = target.iter().map(|&v| loss.eval_grad(v, 0.0)).collect();
 
-    let mut learner = BitTreeLearner::new(&config, &dataset, gradients);
-    //let mut learner = BaselineLearner::new(&config, &dataset, gradients);
-
+    // Timings
     let r = 20;
     let now = Instant::now();
-    for _ in 0..r { learner.reset(); learner.train(); }
+    for _ in 0..r {
+        let mut learner = BitTreeLearner::new(&config, &dataset, &gradients, grad_bounds);
+        learner.train();
+    }
     let elapsed = now.elapsed();
     println!("TRAINED IN {} ms", (elapsed.as_secs() as f32 * 1e3 +
              elapsed.subsec_micros() as f32 * 1e-3) / r as f32);
 
+    // Results
+    let mut learner = BitTreeLearner::new(&config, &dataset, &gradients, grad_bounds);
+    learner.train();
+
     let tree = learner.into_tree();
     let pred = tree.predict(&dataset);
-    let eval = tree.evaluate(&dataset, &L2Loss::new());
+    let eval = L2Loss::new().eval(dataset.target().get_raw_data().iter().cloned(),
+                                  pred.iter().cloned());
 
     println!("eval: {:e}", eval);
     println!("{:?}", tree);
@@ -54,8 +58,6 @@ pub fn main() -> Result<(), String> {
     println!("writing results...");
     write_results(&pred).expect("writing failed");
     println!("done");
-
-    Ok(())
 }
 
 use std::fs::File;

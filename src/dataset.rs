@@ -223,10 +223,6 @@ impl Dataset {
         // Create linear feature ids
         features.iter_mut().enumerate().for_each(|(i, f)| f.set_id(i));
 
-        for f in features.iter() {
-            debug!("feature {} {}", f.id(), f.colnum());
-        }
-
         let elapsed = start.elapsed();
         info!("Loaded {} features of length {} in CSV format in {:.2} s",
               features.len(), record_count,
@@ -271,7 +267,7 @@ impl Dataset {
                     Learner::BitLearner => f.add_bitvecs_repr(),
                 }
             } else {
-                warn!("Unknown feature specified as categorical: {}", i);
+                //warn!("Unknown feature specified as categorical: {}", i);
             }
         }
 

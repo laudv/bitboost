@@ -2,7 +2,6 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 use crate::{NumT, NomT};
 use crate::dataset::Dataset;
-use crate::tree::loss::LossFun;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SplitCrit {
@@ -24,7 +23,10 @@ pub struct Tree {
     ninternal: usize,
     max_depth: usize,
     split_crits: Vec<SplitCrit>,
-    node_values: Vec<NumT>
+    node_values: Vec<NumT>,
+
+    shrinkage: NumT,
+    bias: NumT,
 }
 
 impl Tree {
@@ -35,6 +37,9 @@ impl Tree {
             max_depth: max_depth,
             split_crits: Vec::new(),
             node_values: Vec::new(),
+
+            shrinkage: 1.0,
+            bias: 0.0,
         };
         let nnodes = tree.max_nnodes();
 
@@ -84,8 +89,18 @@ impl Tree {
         self.ninternal += 1;
     }
 
-    pub fn predict(&self, dataset: &Dataset) -> Vec<NumT> {
-        let mut predictions = Vec::with_capacity(dataset.nexamples());
+    pub fn set_shrinkage(&mut self, scale: NumT) {
+        self.shrinkage = scale;
+    }
+
+    pub fn set_bias(&mut self, bias: NumT) {
+        self.bias = bias;
+    }
+
+    /// Predict and store the result as defined by `f` in `predict_buf`.
+    pub fn predict_and<F>(&self, dataset: &Dataset, predict_buf: &mut [NumT], f: F)
+    where F: Fn(NumT, &mut NumT) {
+        assert_eq!(predict_buf.len(), dataset.nexamples());
         for i in 0..dataset.nexamples() {
             let mut node_id = 0;
             loop {
@@ -97,28 +112,26 @@ impl Tree {
                                   else                  { self.right_child(node_id) };
                     },
                     &SplitCrit::Undefined => { // this is a leaf node
-                        predictions.push(self.node_values[node_id]);
+                        let node_value = self.node_values[node_id];
+                        let prediction = self.shrinkage * (node_value + self.bias);
+                        f(prediction, &mut predict_buf[i]);
                         break;
                     },
                 }
             }
         }
-        predictions
     }
 
-    // TODO implement 'Metric', separately from Loss
-    pub fn evaluate<L>(&self, dataset: &Dataset, loss: &L) -> NumT
-    where L: LossFun {
-        let targets = dataset.target().get_raw_data();
-        let predictions = self.predict(dataset);
-        let mut l = 0.0;
+    pub fn predict_buf(&self, dataset: &Dataset, predict_buf: &mut [NumT]) {
+        self.predict_and(dataset, predict_buf, |prediction, buf_elem| {
+            *buf_elem = prediction;
+        });
+    }
 
-        for (&y, yhat) in targets.iter().zip(predictions) {
-            //debug!("{:+.4}   {:+.4} -> loss={:.4}", y, yhat, loss.eval(y, yhat));
-            l += loss.eval(y, yhat);
-        }
-
-        l / dataset.nexamples() as NumT
+    pub fn predict(&self, dataset: &Dataset) -> Vec<NumT> {
+        let mut predictions = vec![0.0; dataset.nexamples()];
+        self.predict_buf(dataset, &mut predictions);
+        predictions
     }
 }
 
@@ -165,8 +178,19 @@ impl AdditiveTree {
         }
     }
 
-    pub fn predict(&self, data: &Dataset, results: &mut Vec<NumT>) {
-        unimplemented!()
+    pub fn push_tree(&mut self, tree: Tree) {
+        self.trees.push(tree);
+    }
+
+    pub fn predict(&self, dataset: &Dataset) -> Vec<NumT> {
+        let nexamples = dataset.nexamples();
+        let mut buf = vec![0.0; nexamples];
+        let mut accum = vec![0.0; nexamples];
+        for tree in &self.trees {
+            tree.predict_buf(dataset, &mut buf);
+            accum.iter_mut().zip(buf.iter()).for_each(|(x, b)| *x += b);
+        }
+        accum
     }
 }
 

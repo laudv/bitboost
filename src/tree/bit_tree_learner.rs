@@ -1,6 +1,4 @@
-use std::marker::PhantomData;
 use std::ops::{Sub, Add};
-use std::time::Instant;
 use std::mem::size_of;
 
 use log::debug;
@@ -10,7 +8,7 @@ use crate::config::Config;
 use crate::tree::{Tree, SplitCrit};
 use crate::dataset::{Dataset, FeatureRepr};
 use crate::slice_store::{SliceRange, HistStore, BitBlockStore};
-use crate::slice_store::{BitVecRef, BitVecMut, BitSliceRef, BitSliceMut};
+use crate::slice_store::{BitVecRef};
 use crate::slice_store::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2, BitSliceLayout4};
 
 struct Node2Split {
@@ -97,11 +95,19 @@ impl Add for HistVal {
     }
 }
 
+
+
+
+
+
+// ------------------------------------------------------------------------------------------------
+
 pub struct TreeLearner<'a> {
     config: &'a Config,
     dataset: &'a Dataset,
-    gradients: Vec<NumT>,
+    gradients: &'a [NumT],
     tree: Tree,
+    grad_bounds: (NumT, NumT),
 
     /// Storage for histograms.
     hist_store: HistStore<HistVal>,
@@ -126,13 +132,15 @@ pub struct TreeLearner<'a> {
 }
 
 impl <'a> TreeLearner<'a> {
-    pub fn new(config: &'a Config, data: &'a Dataset, gradients: Vec<NumT>) -> Self {
+    pub fn new(config: &'a Config, data: &'a Dataset, gradients: &'a [NumT],
+               grad_bounds: (NumT, NumT)) -> Self
+    {
         let tree = Tree::new(config.max_tree_depth);
 
         let discr_width = config.discr_nbits;
-        let get_root_n2s_fun = get__get_root_node2split__fun(discr_width);
-        let compress_examples_fun = get__compress_examples__fun(discr_width);
-        let build_histograms_fun = get__build_histograms__fun(discr_width);
+        let get_root_n2s_fun = get_get_root_node2split_fun(discr_width);
+        let compress_examples_fun = get_compress_examples_fun(discr_width);
+        let build_histograms_fun = get_build_histograms_fun(discr_width);
 
         let hist_store = HistStore::for_dataset(data);
         let index_store = BitBlockStore::new(1024);
@@ -144,6 +152,7 @@ impl <'a> TreeLearner<'a> {
             dataset: data,
             gradients,
             tree,
+            grad_bounds,
 
             hist_store,
             index_store,
@@ -344,14 +353,6 @@ impl <'a> TreeLearner<'a> {
         -grad_sum / (hess_sum + lambda)
     }
 
-    pub fn reset(&mut self) {
-        self.tree = Tree::new(self.config.max_tree_depth);
-        self.hist_store = HistStore::for_dataset(self.dataset);
-        self.index_store = BitBlockStore::new(1024);
-        self.mask_store = BitBlockStore::new(1024);
-        self.gradient_store = BitBlockStore::new(1024 * self.config.discr_nbits);
-    }
-
     pub fn into_tree(self) -> Tree {
         self.tree
     }
@@ -370,7 +371,7 @@ impl <'a> TreeLearner<'a> {
     fn debug_print_split_generic<BSL>(&self, n2s: &Node2Split, split: &Split)
     where BSL: BitSliceLayout {
         let nid = n2s.node_id;
-        let bounds = self.config.discr_bounds;
+        let bounds = self.grad_bounds;
         let (feat_id, feat_val) = split.split_crit.unpack_eqtest().unwrap();
 
         let ems_bitset = self.mask_store.get_bitvec(n2s.mask_range);
@@ -439,7 +440,7 @@ macro_rules! get_root_node2split {
             {
                 let mut slice = l.gradient_store.get_bitslice_mut::<$bsl>(grad_range);
                 for (i, &v) in l.gradients.iter().enumerate() {
-                    slice.set_scaled_value(i, v, l.config.discr_bounds);
+                    slice.set_scaled_value(i, v, l.grad_bounds);
                 }
             }
 
@@ -561,7 +562,7 @@ macro_rules! get_grad_and_hess_sums {
 
                 for k in 0..32 {
                     if m >> k & 0x1 == 0x1 {
-                        sum1 += gradients.get_scaled_value(i*32 + k, l.config.discr_bounds);
+                        sum1 += gradients.get_scaled_value(i*32 + k, l.grad_bounds);
                         count1 += 1;
                     }
                 }
@@ -590,7 +591,7 @@ macro_rules! get_grad_and_hess_sums {
                 let sum = unsafe {
                     gradients.sum_all_masked2_unsafe(&ems, &fval_mask)
                 };
-                let sum = $bsl::linproj(sum as NumT, count, l.config.discr_bounds);
+                let sum = $bsl::linproj(sum as NumT, count, l.grad_bounds);
 
                 (sum, hess)
             }
@@ -609,7 +610,7 @@ macro_rules! get_grad_and_hess_sums {
                 let sum = unsafe {
                     gradients.sum_all_masked2_compr_unsafe(&indices, &ems, &fval_mask)
                 };
-                let sum = $bsl::linproj(sum as NumT, count, l.config.discr_bounds);
+                let sum = $bsl::linproj(sum as NumT, count, l.grad_bounds);
 
                 (sum, hess)
             }
@@ -621,6 +622,8 @@ macro_rules! get_grad_and_hess_sums {
 }
 
 // Generate specialized implementations for each BitSlice layout (discr_width)
+// We do this this way because rustc didn't generate efficient code when TreeBuilder was given a
+// generic paramter BSL: BitSliceLayout
 get_root_node2split!(get_root_node2split_w1, BitSliceLayout1);
 get_root_node2split!(get_root_node2split_w2, BitSliceLayout2);
 get_root_node2split!(get_root_node2split_w4, BitSliceLayout4);
@@ -637,7 +640,7 @@ type GetRootN2SFun = fn(&mut TreeLearner) -> Node2Split;
 type CompressExamplesFun = fn(&mut TreeLearner, &Node2Split, Node2Split, usize) -> Node2Split;
 type BuildHistogramsFun = fn(&mut TreeLearner, &Node2Split);
 
-fn get__get_root_node2split__fun(discr_width: usize)
+fn get_get_root_node2split_fun(discr_width: usize)
     -> GetRootN2SFun
 {
     match discr_width {
@@ -648,7 +651,7 @@ fn get__get_root_node2split__fun(discr_width: usize)
     }
 }
 
-fn get__compress_examples__fun(discr_width: usize)
+fn get_compress_examples_fun(discr_width: usize)
     -> CompressExamplesFun
 {
     match discr_width {
@@ -659,7 +662,7 @@ fn get__compress_examples__fun(discr_width: usize)
     }
 }
 
-fn get__build_histograms__fun(discr_width: usize)
+fn get_build_histograms_fun(discr_width: usize)
     -> BuildHistogramsFun
 {
     match discr_width {
