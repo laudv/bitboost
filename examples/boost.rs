@@ -12,11 +12,12 @@ pub fn main() {
     config.target_feature_id = -1;
     config.categorical_columns = (0..256).collect();
     config.max_tree_depth = 6;
-    config.discr_nbits = 4;
+    config.discr_nbits = 1;
     config.compression_threshold = 0.50;
 
-    config.learning_rate = 0.1;
-    config.niterations = 100;
+    config.learning_rate = 0.5;
+    config.niterations = 10;
+    config.optimize_leaf_values = false;
 
     let args: Vec<String> = env::args().collect();
     let filename = args.get(1).expect("no data file given");

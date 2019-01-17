@@ -21,10 +21,17 @@ pub trait LossFun {
             sum += err;
             count += 1;
         }
-        let range = max - min;
-        let min = min - 0.1 * range;
-        let max = max + 0.1 * range;
+        //let bias = sum / count as NumT; // mean
+        ////let min = min + bias;
+        ////let max = max + bias;
+        //let range = max - min;
+        //let min = min - 0.1 * range;
+        //let max = max + 0.1 * range;
         let bias = sum / count as NumT; // mean
+        println!("{} vs {}", max - bias, bias - min);
+        let range = NumT::min(max - bias, bias - min);
+        let min = -1.0 * range;
+        let max = 1.0 * range;
         (min, max, bias)
     }
 }

@@ -33,6 +33,7 @@ pub struct Config {
     // Boosting
     pub learning_rate: NumT,
     pub niterations: usize,
+    pub optimize_leaf_values: bool,
 }
 
 impl Config {
@@ -58,6 +59,7 @@ impl Config {
 
             learning_rate: 0.1,
             niterations: 100,
+            optimize_leaf_values: true,
         }
     }
 }

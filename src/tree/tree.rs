@@ -2,6 +2,7 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 use crate::{NumT, NomT};
 use crate::dataset::Dataset;
+use crate::tree::loss::LossFun;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SplitCrit {
@@ -89,8 +90,56 @@ impl Tree {
         self.ninternal += 1;
     }
 
+    fn predict_leaf_id_of_example(&self, dataset: &Dataset, i: usize) -> usize {
+        let mut node_id = 0;
+        loop {
+            let split_crit = &self.split_crits[node_id];
+            match split_crit {
+                &SplitCrit::EqTest(feat_id, split_val) => { // this is an internal node
+                    let value = dataset.get_cat_value(feat_id, i).expect("invalid feat_id");
+                    node_id = if value == split_val { self.left_child(node_id) }
+                              else                  { self.right_child(node_id) };
+                },
+                &SplitCrit::Undefined => { // this is a leaf node
+                    return node_id;
+                },
+            }
+        }
+    }
+
+    /// Optimize by taking the mean of the targets in each leaf. This is optimal for L2
+    /// TODO generalize this for more loss functions.
+    pub fn optimize_leaf_values<I>(&mut self, dataset: &Dataset, targets: I)
+    where I: Iterator<Item=NumT>,
+    {
+        let mut leaf_sums = vec![0.0; self.max_nnodes()];
+        let mut leaf_counts = vec![0; self.max_nnodes()];
+
+        for (i, target) in targets.enumerate() {
+            let leaf_id = self.predict_leaf_id_of_example(dataset, i);
+            leaf_sums[leaf_id] += target;
+            leaf_counts[leaf_id] += 1;
+        }
+
+        let mut stack = Vec::new();
+        stack.push(0);
+        while let Some(node_id) = stack.pop() {
+            match self.split_crits[node_id] {
+                SplitCrit::Undefined => {
+                    let sum = leaf_sums[node_id];
+                    let count = leaf_counts[node_id] as NumT;
+                    self.node_values[node_id] = sum / count;
+                },
+                _ => {
+                    stack.push(self.left_child(node_id));
+                    stack.push(self.right_child(node_id));
+                }
+            }
+        }
+    }
+
     pub fn set_shrinkage(&mut self, scale: NumT) {
-        self.shrinkage = scale;
+        self.shrinkage *= scale;
     }
 
     pub fn set_bias(&mut self, bias: NumT) {
@@ -100,25 +149,16 @@ impl Tree {
     /// Predict and store the result as defined by `f` in `predict_buf`.
     pub fn predict_and<F>(&self, dataset: &Dataset, predict_buf: &mut [NumT], f: F)
     where F: Fn(NumT, &mut NumT) {
+        let targets = dataset.target().get_raw_data();
         assert_eq!(predict_buf.len(), dataset.nexamples());
         for i in 0..dataset.nexamples() {
-            let mut node_id = 0;
-            loop {
-                let split_crit = &self.split_crits[node_id];
-                match split_crit {
-                    &SplitCrit::EqTest(feat_id, split_val) => { // this is an internal node
-                        let value = dataset.get_cat_value(feat_id, i).expect("invalid feat_id");
-                        node_id = if value == split_val { self.left_child(node_id) }
-                                  else                  { self.right_child(node_id) };
-                    },
-                    &SplitCrit::Undefined => { // this is a leaf node
-                        let node_value = self.node_values[node_id];
-                        let prediction = self.shrinkage * (node_value + self.bias);
-                        f(prediction, &mut predict_buf[i]);
-                        break;
-                    },
-                }
-            }
+            let leaf_id = self.predict_leaf_id_of_example(dataset, i);
+            let leaf_value = self.node_values[leaf_id];
+            let prediction = self.shrinkage * (leaf_value + self.bias);
+            //print!("prediction[{:4}]: {:+.4}", i, predict_buf[i]);
+            f(prediction, &mut predict_buf[i]);
+            //println!(" -> {:+.4} (tree_pred={:+.4} target={:+.4})", predict_buf[i],
+            //    prediction, targets[i]);
         }
     }
 
@@ -184,11 +224,11 @@ impl AdditiveTree {
 
     pub fn predict(&self, dataset: &Dataset) -> Vec<NumT> {
         let nexamples = dataset.nexamples();
-        let mut buf = vec![0.0; nexamples];
         let mut accum = vec![0.0; nexamples];
         for tree in &self.trees {
-            tree.predict_buf(dataset, &mut buf);
-            accum.iter_mut().zip(buf.iter()).for_each(|(x, b)| *x += b);
+            tree.predict_and(dataset, &mut accum, |prediction, accum| {
+                *accum += prediction;
+            });
         }
         accum
     }

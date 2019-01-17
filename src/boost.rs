@@ -80,12 +80,18 @@ impl <'a> Booster<'a> {
         tree.set_bias(bias);
         tree.set_shrinkage(self.config.learning_rate);
 
+        if self.config.optimize_leaf_values {
+            let tree_target_iter = self.targets.iter().cloned()
+                .zip(self.predictions.iter().cloned())
+                .map(|(t, p)| t-p);
+            tree.optimize_leaf_values(self.dataset, tree_target_iter);
+        }
+
         self.update_predictions(&tree);
         self.ensemble.push_tree(tree);
 
         let metric = self.evaluate();
-
-        info!("I{:03} range: [{:.3}, {:.3}], bias: {:.4}, {} metric: {:.4e}",
+        info!("I{:03} range: [{:.3}, {:.3}], bias: {:.4}, {} metric: {}",
               self.iter_count, min, max, bias, self.loss.evaluator_name(), metric);
     }
 

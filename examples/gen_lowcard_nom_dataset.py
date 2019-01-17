@@ -11,7 +11,7 @@ output_values4 = [-1.0, -0.8666666666666667, -0.7333333333333334, -0.6,
         0.7333333333333334, 0.8666666666666667, 1.0]
 
 
-def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
+def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16], ntrees=1):
     np.random.seed(seed)
 
     # generate columns
@@ -20,7 +20,21 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
         card = np.random.randint(card_range[0], card_range[1])
         columns.append(np.random.randint(0, card, n))
 
+    for i in range(ntrees):
+        output = gen_output_for_columns(columns, max_depth)
+
+    data = {}
+    for (i, col) in enumerate(columns):
+        data["col{}".format(i)] = col
+    data["output"] = output.round(3)
+
+    frame = pandas.DataFrame(data = data)
+    return frame
+
+def gen_output_for_columns(columns, max_depth):
     # simulate a decision tree to generate output
+    nattr = len(columns)
+    print("nattr", nattr);
     output = np.zeros(n)
     stack = []
     stack.append(np.array(range(n))) # node selection
@@ -64,26 +78,25 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16]):
             node_ids.append(2 * node_id + 2)
             node_ids.append(2 * node_id + 1)
         else:
-            #leaf_value = np.random.rand()
-            leaf_value = random.choice(output_values1)
+            leaf_value = np.random.rand()
+            #leaf_value = random.choice(output_values1)
             print(" LEAF: node_id {} value {}".format(node_id, leaf_value))
             output[examples] = leaf_value
 
     # add some noise
     #output += 0.05 * np.random.randn(n)
 
-    data = {}
-    for (i, col) in enumerate(columns):
-        data["col{}".format(i)] = col
-    data["output"] = output.round(3)
+    return output
 
-    frame = pandas.DataFrame(data = data)
-    return frame
+
+
+
+
 
 if __name__ == "__main__":
     seed = 12
-    n = 100000
-    attr = 64
+    n = 100
+    attr = 4
     max_depth = 4
     card_range = [4, 5]
     compression = False
