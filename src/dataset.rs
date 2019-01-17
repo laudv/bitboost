@@ -103,6 +103,7 @@ impl Feature {
         let card = map.len();
         let nblocks = BitBlock::blocks_required_for(nexamples);
         let mut store = BitBlockStore::new(card * nblocks);
+        let values = vec![0; nexamples];
 
         let mut ranges = Vec::new();
         for _ in 0..card {
@@ -110,9 +111,10 @@ impl Feature {
         }
 
         let mut repr = BitVecFeature {
-            card: card,
-            ranges: ranges,
-            store: store,
+            card,
+            values,
+            ranges,
+            store,
         };
 
         for (i, v) in self.raw_data.iter().enumerate() {
@@ -120,6 +122,7 @@ impl Feature {
             let feat_val = map[&k];
             let mut bitvec = repr.get_bitvec_mut(feat_val);
             bitvec.set_bit(i, true);
+            repr.values[i] = feat_val;
         }
 
         self.repr = Some(FeatureRepr::BitVecFeature(repr));
@@ -144,6 +147,7 @@ impl Feature {
 
 pub struct BitVecFeature {
     pub card: usize,
+    values: Vec<NomT>,
     ranges: Vec<SliceRange>,
     store: BitBlockStore,
 }
@@ -308,12 +312,7 @@ impl Dataset {
     pub fn get_cat_value(&self, feat_id: usize, example: usize) -> Option<NomT> {
         match self.get_feature(feat_id).get_repr() {
             Some(&FeatureRepr::BitVecFeature(ref f)) => {
-                let mut ret = None;
-                for i in 0..f.card {
-                    let bitvec = f.get_bitvec(i as u16);
-                    if bitvec.get_bit(example) { ret = Some(i as NomT); break; }
-                }
-                ret
+                Some(f.values[example])
             },
             Some(&FeatureRepr::CatFeature(_card, ref data)) => {
                 Some(data[example])
