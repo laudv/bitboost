@@ -2,12 +2,13 @@ use std::alloc;
 use std::borrow::{Borrow, BorrowMut};
 use std::fmt::Debug;
 use std::mem::{size_of, align_of};
+use std::ptr;
 use std::ops::{Sub, Add, Deref, DerefMut};
 use std::slice;
 use std::marker::PhantomData;
 
+use fnv::FnvHashMap as HashMap;
 use num::Integer;
-
 use log::debug;
 
 use crate::NumT;
@@ -21,17 +22,22 @@ pub type BitVecMut<'a> = BitVec<&'a mut [BitBlock]>;
 pub type BitSliceRef<'a, L> = BitSlice<&'a [BitBlock], L>;
 pub type BitSliceMut<'a, L> = BitSlice<&'a mut [BitBlock], L>;
 
+/// Will not Drop elements!
 pub struct SliceStore<T>
 where T: Clone {
+    /// Pointer to memory for this store.
+    ptr: *mut T,
+    _marker: PhantomData<T>,
 
-    /// Storage for slices.
-    buffer: Vec<T>,
+    capacity: usize,
+    elem_align: usize,
+    len: usize,
 
     /// Freed slices: very simple design, but allows simple memory reuse w/o reallocation.
     free: Vec<SliceRange>,
 
-    /// Align byte boundary.
-    elem_align: usize,
+    /// Stores the ends of slices so we can always recover full slices when freed/reused.
+    slice_ends: HashMap<u32, u32>,
 }
 
 impl <T> SliceStore<T>
@@ -44,34 +50,91 @@ where T: Clone {
 
     pub fn aligned(initial_cap: usize, byte_align: usize) -> Self {
         assert!(byte_align % size_of::<T>() == 0, "invalid alignment");
+        assert!(!std::mem::needs_drop::<T>());
 
         let elem_align = byte_align / size_of::<T>();
+        let ptr = unsafe { Self::alloc(initial_cap, byte_align) };
+
         SliceStore {
-            buffer: Self::alloc(initial_cap, byte_align),
+            ptr,
+            _marker: PhantomData,
+
+            capacity: initial_cap,
+            len: 0,
+
+            slice_ends: HashMap::default(),
             free: Vec::new(),
-            elem_align: elem_align,
+            elem_align,
         }
     }
 
-    fn alloc(nelems: usize, byte_align: usize) -> Vec<T> {
-        let nbytes = nelems * size_of::<T>();
+    unsafe fn alloc(capacity: usize, byte_align: usize) -> *mut T {
+        let nbytes = capacity * size_of::<T>();
+        let layout = alloc::Layout::from_size_align(nbytes, byte_align).unwrap();
+        let ptr = alloc::alloc(layout) as *mut T;
+        if ptr.is_null() { panic!("out of memory (alloc)"); }
+        assert!(ptr as usize % byte_align == 0);
+        ptr
+    }
+
+    unsafe fn realloc(&mut self, new_cap: usize) {
+        assert!(new_cap > self.capacity);
+        let old_nbytes = self.capacity * size_of::<T>();
+        let new_nbytes = new_cap * size_of::<T>();
+        let byte_align = self.elem_align * size_of::<T>();
+        let layout = alloc::Layout::from_size_align(old_nbytes, byte_align).unwrap();
+        let ptr = alloc::realloc(self.ptr as *mut u8, layout, new_nbytes) as *mut T;
+        if ptr.is_null() { panic!("out of memory (realloc)"); }
+        assert!(ptr as usize % byte_align == 0);
+
+        self.ptr = ptr;
+        self.capacity = new_cap;
+    }
+
+    fn resize(&mut self, new_len: usize, value: T) {
+        if new_len > self.capacity {
+            let mut new_cap = self.capacity * 2;
+            while new_cap < new_len { new_cap *= 2; }
+            unsafe { self.realloc(new_cap) };
+        }
+
+        // Initialize "visible" elements
+        for i in self.len..new_len {
+            unsafe { ptr::write(self.ptr.add(i), value.clone()) };
+        }
+
+        self.len = new_len;
+    }
+
+    fn buffer(&self) -> &[T] {
+        unsafe { slice::from_raw_parts(self.ptr, self.capacity) }
+    }
+
+    fn buffer_mut(&mut self) -> &mut [T] {
+        unsafe { slice::from_raw_parts_mut(self.ptr, self.capacity) }
+    }
+}
+
+impl <T> Drop for SliceStore<T>
+where T: Clone {
+    fn drop(&mut self) {
+        let nbytes = self.capacity * size_of::<T>();
+        let byte_align = self.elem_align * size_of::<T>();
+        let layout = alloc::Layout::from_size_align(nbytes, byte_align).unwrap();
         unsafe {
-            let layout = alloc::Layout::from_size_align(nbytes, byte_align).unwrap();
-            let ptr = alloc::alloc(layout) as *mut T;
-            if ptr.is_null() { panic!("out of memory"); }
-
-            assert!(ptr as usize % byte_align == 0);
-
-            Vec::from_raw_parts(ptr, 0, nelems)
+            alloc::dealloc(self.ptr as *mut u8, layout);
         }
     }
+}
 
+impl <T> SliceStore<T>
+where T: Clone {
     pub fn get_slice(&self, r: SliceRange) -> &[T] {
-        &self.buffer[r.0 as usize..r.1 as usize]
+        &self.buffer()[r.0 as usize..r.1 as usize]
     }
 
     pub fn get_slice_mut(&mut self, r: SliceRange) -> &mut [T] {
-        &mut self.buffer[r.0 as usize..r.1 as usize]
+        &mut self.buffer_mut()[r.0 as usize..r.1 as usize]
     }
 
     pub fn get_two_slices_mut(&mut self, r1: SliceRange, r2: SliceRange)
@@ -79,10 +142,10 @@ where T: Clone {
     {
         debug_assert!(r1 != r2);
         if r1.0 < r2.0 {
-            let (s1, s2) = self.buffer.split_at_mut(r2.0 as usize);
+            let (s1, s2) = self.buffer_mut().split_at_mut(r2.0 as usize);
             (&mut s1[r1.0 as usize..r1.1 as usize], &mut s2[0..(r2.1-r2.0) as usize])
         } else {
-            let (s1, s2) = self.buffer.split_at_mut(r1.0 as usize);
+            let (s1, s2) = self.buffer_mut().split_at_mut(r1.0 as usize);
             (&mut s2[0..(r1.1-r1.0) as usize], &mut s1[r2.0 as usize..r2.1 as usize])
         }
     }
@@ -104,17 +167,20 @@ where T: Clone {
         }
 
         // allocate new memory in buffer
-        let old_len_unaligned = self.buffer.len();
+        let old_len_unaligned = self.len;
         let m = old_len_unaligned % self.elem_align;
         let old_len = if m == 0 { old_len_unaligned }
                       else { old_len_unaligned + self.elem_align - m };
         let new_len = old_len + len as usize;
 
         assert!(new_len < u32::max_value() as usize);
-        debug_assert!(self.buffer.as_ptr() as usize % (self.elem_align * size_of::<T>()) == 0);
+        debug_assert!(self.ptr as usize % (self.elem_align * size_of::<T>()) == 0);
 
-        self.buffer.resize(new_len, value);
-        (old_len as u32, new_len as u32)
+        self.resize(new_len, value);
+        let slice_start = old_len as u32;
+        let slice_end = new_len as u32;
+        self.slice_ends.insert(slice_start, slice_end);
+        (slice_start, slice_end)
     }
 
     pub fn alloc_slice_default(&mut self, len: u32) -> SliceRange
@@ -123,7 +189,14 @@ where T: Clone {
     }
 
     pub fn free_slice(&mut self, range: SliceRange) {
-        self.free.push(range)
+        let full_range = (range.0, self.slice_ends[&range.0]);
+        self.free.push(full_range)
+    }
+
+    pub fn reset(&mut self) {
+        self.len = 0;
+        self.free = Vec::new();
+        self.slice_ends = HashMap::default();
     }
 }
 
@@ -194,7 +267,7 @@ where T: Clone + Default {
         let (llo, _) = left_range;
         let (rlo, _) = right_range;
 
-        let buffer = &mut self.slice_store.buffer;
+        let buffer = self.slice_store.buffer_mut();
 
         debug_assert_eq!(phi-plo, *self.hist_layout.last().unwrap());
 
@@ -234,6 +307,10 @@ where T: Clone + Default {
 
     pub fn free_hists(&mut self, r: SliceRange) {
         self.slice_store.free_slice(r);
+    }
+
+    pub fn reset(&mut self) {
+        self.slice_store.reset();
     }
 }
 
@@ -370,6 +447,10 @@ impl BitBlockStore {
     {
         let (v1, v2) = self.get_two_bitvecs_mut(r1, r2);
         (BitSlice::new(v1), BitSlice::new(v2))
+    }
+
+    pub fn reset(&mut self) {
+        self.slice_store.reset();
     }
 }
 
@@ -1043,10 +1124,14 @@ mod test {
 
         let mut sum_check = 0u64;
         let mut store = BitBlockStore::new(16);
+        println!("slice_r");
         let slice_r = store.alloc_zero_bitslice::<L>(n);
+        println!("mask_r1");
         let mask_r1 = store.alloc_zero_bits(n);
         let n_u32 = store.get_bitvec(mask_r1).block_len::<u32>();
+        println!("mask_r2");
         let mask_r2 = store.alloc_zero_bits(4*n);
+        println!("idxs_r");
         let idxs_r = store.alloc_from_iter(n_u32, (0..n_u32).map(|i| (2*i) as u32));
 
         let mut slice = store.get_bitslice_mut::<L>(slice_r);
