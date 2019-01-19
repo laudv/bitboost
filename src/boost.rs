@@ -6,7 +6,7 @@ use crate::NumT;
 use crate::config::Config;
 use crate::dataset::Dataset;
 use crate::tree::{Tree, AdditiveTree};
-use crate::tree::bit_tree_learner::TreeLearner;
+use crate::tree::bit_tree_learner::{TreeLearner, LearnerResources};
 use crate::tree::loss;
 use crate::tree::loss::{LossFun, LossFunGrad};
 use crate::tree::eval::Evaluator;
@@ -50,9 +50,10 @@ impl <'a> Booster<'a> {
     pub fn train(&mut self) {
         assert!(self.iter_count == 0);
         let start = Instant::now();
+        let mut r = LearnerResources::new(self.config, self.dataset);
 
         for _ in 0..self.config.niterations {
-            self.train_one_iter();
+            self.train_one_iter(&mut r);
 
             let el = start.elapsed();
             let seconds = el.as_secs() as f32 + el.subsec_micros() as f32 * 1e-6;
@@ -60,7 +61,7 @@ impl <'a> Booster<'a> {
         }
     }
 
-    pub fn train_one_iter(&mut self) {
+    fn train_one_iter(&mut self, resources: &mut LearnerResources) {
         self.iter_count += 1;
         let pairs = self.targets.iter().cloned().zip(self.predictions.iter().cloned());
         let (min, max, bias) = self.loss.boost_stats(pairs);
@@ -69,7 +70,7 @@ impl <'a> Booster<'a> {
         let mut tree = {
             let grad_bounds = (min, max);
             let mut learner = TreeLearner::new(self.config, self.dataset, &self.gradients,
-                                               grad_bounds);
+                                               grad_bounds, resources);
             let start = Instant::now();
             learner.train();
             let el = start.elapsed();

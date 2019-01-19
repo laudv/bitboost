@@ -95,6 +95,24 @@ impl Add for HistVal {
     }
 }
 
+pub struct LearnerResources {
+    hist_store: HistStore<HistVal>,
+    index_store: BitBlockStore,
+    mask_store: BitBlockStore,
+    gradient_store: BitBlockStore,
+}
+
+impl LearnerResources {
+    pub fn new(config: &Config, data: &Dataset) -> Self {
+        LearnerResources {
+            hist_store: HistStore::for_dataset(data),
+            index_store: BitBlockStore::new(4024),
+            mask_store: BitBlockStore::new(4024),
+            gradient_store: BitBlockStore::new(4024 * config.discr_nbits),
+        }
+    }
+}
+
 
 
 
@@ -110,17 +128,17 @@ pub struct TreeLearner<'a> {
     grad_bounds: (NumT, NumT),
 
     /// Storage for histograms.
-    hist_store: HistStore<HistVal>,
+    hist_store: &'a mut HistStore<HistVal>,
 
     /// Storage for indices pointing to none-zero 32-bit example selection blocks.
-    index_store: BitBlockStore,
+    index_store: &'a mut BitBlockStore,
 
     /// Storage for example selection masks.
-    mask_store: BitBlockStore,
-
+    mask_store: &'a mut BitBlockStore,
 
     /// Store for gradients
-    gradient_store: BitBlockStore,
+    gradient_store: &'a mut BitBlockStore,
+
 
     /// get_root_node2split function pointer
     get_root_n2s_fun: GetRootN2SFun,
@@ -134,7 +152,8 @@ pub struct TreeLearner<'a> {
 
 impl <'a> TreeLearner<'a> {
     pub fn new(config: &'a Config, data: &'a Dataset, gradients: &'a [NumT],
-               grad_bounds: (NumT, NumT)) -> Self
+               grad_bounds: (NumT, NumT), r: &'a mut LearnerResources)
+        -> Self
     {
         let tree = Tree::new(config.max_tree_depth);
 
@@ -143,11 +162,6 @@ impl <'a> TreeLearner<'a> {
         let compress_examples_fun = get_compress_examples_fun(discr_width);
         let build_histograms_fun = get_build_histograms_fun(discr_width);
 
-        let hist_store = HistStore::for_dataset(data);
-        let index_store = BitBlockStore::new(1024);
-        let mask_store = BitBlockStore::new(1024);
-        let gradient_store = BitBlockStore::new(1024 * discr_width);
-
         TreeLearner {
             config,
             dataset: data,
@@ -155,10 +169,10 @@ impl <'a> TreeLearner<'a> {
             tree,
             grad_bounds,
 
-            hist_store,
-            index_store,
-            mask_store,
-            gradient_store,
+            hist_store: &mut r.hist_store,
+            index_store: &mut r.index_store,
+            mask_store: &mut r.mask_store,
+            gradient_store: &mut r.gradient_store,
 
             get_root_n2s_fun,
             compress_examples_fun,
@@ -355,6 +369,11 @@ impl <'a> TreeLearner<'a> {
     }
 
     pub fn into_tree(self) -> Tree {
+        self.hist_store.reset();
+        self.index_store.reset();
+        self.mask_store.reset();
+        self.gradient_store.reset();
+
         self.tree
     }
 

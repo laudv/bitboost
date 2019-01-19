@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 
 use fnv::FnvHashMap as HashMap;
 use num::Integer;
-use log::debug;
+use log::warn;
 
 use crate::NumT;
 use crate::bitblock::{BitBlock, get_bit, set_bit, get_bitpos, get_blockpos};
@@ -86,6 +86,8 @@ where T: Clone {
         let ptr = alloc::realloc(self.ptr as *mut u8, layout, new_nbytes) as *mut T;
         if ptr.is_null() { panic!("out of memory (realloc)"); }
         assert!(ptr as usize % byte_align == 0);
+
+        warn!("realloc capacity {} -> {}", self.capacity, new_cap);
 
         self.ptr = ptr;
         self.capacity = new_cap;

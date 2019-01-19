@@ -101,7 +101,7 @@ impl Feature {
         let nexamples = self.raw_data.len();
         let map = self.get_categories();
         let card = map.len();
-        let nblocks = BitBlock::blocks_required_for(nexamples);
+        let nblocks = BitBlock::blocks_required_for(nexamples) + 1;
         let mut store = BitBlockStore::new(card * nblocks);
         let values = vec![0; nexamples];
 
