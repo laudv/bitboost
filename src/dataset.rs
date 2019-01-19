@@ -260,20 +260,20 @@ impl Dataset {
     }
 
     fn gen_reprs(config: &Config, dataset: &mut Dataset) -> Result<(), String> {
-        info!("Generating column representations...");
+        let mut ncat = 0;
 
         for &i in &config.categorical_columns {
             if let Some(f) = dataset.get_feature_by_colnum_mut(i) {
-                info!("Column {} is categorical", i);
-
                 match config.learner {
                     Learner::Baseline => f.add_cat_repr(),
                     Learner::BitLearner => f.add_bitvecs_repr(),
                 }
+                ncat += 1;
             } else {
                 //warn!("Unknown feature specified as categorical: {}", i);
             }
         }
+        info!("Added {} categorical feature representations", ncat);
 
         Ok(())
     }

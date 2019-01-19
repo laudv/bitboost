@@ -11,10 +11,12 @@ use crate::tree::loss;
 use crate::tree::loss::{LossFun, LossFunGrad};
 use crate::tree::eval::Evaluator;
 
+type Loss = loss::L2Loss;
+
 pub struct Booster<'a> {
     config: &'a Config,
     dataset: &'a Dataset,
-    loss: loss::L2Loss,
+    loss: Loss,
     targets: &'a [NumT],
     iter_count: usize, 
 
@@ -35,7 +37,7 @@ impl <'a> Booster<'a> {
         Booster {
             config,
             dataset,
-            loss: loss::L2Loss::new(),
+            loss: Loss::new(),
             targets: dataset.target().get_raw_data(),
             iter_count: 0,
 
@@ -101,6 +103,9 @@ impl <'a> Booster<'a> {
             let p = self.predictions[i] + prediction_bias;
             self.gradients[i] = self.loss.eval_grad(t, p);
         }
+
+        //println!("min grad: {}", self.gradients.iter().fold( 1000.0, |x,&y| if x < y { x } else { y } ));
+        //println!("max grad: {}", self.gradients.iter().fold(-1000.0, |x,&y| if x > y { x } else { y } ));
     }
 
     fn update_predictions(&mut self, new_tree: &Tree) {
@@ -110,8 +115,7 @@ impl <'a> Booster<'a> {
     }
 
     fn evaluate(&self) -> NumT {
-        self.loss.evaluate(self.targets.iter().cloned(),
-                           self.predictions.iter().cloned())
+        self.loss.evaluate(self.targets.iter().cloned(), self.predictions.iter().cloned())
     }
 
     pub fn into_model(self) -> AdditiveTree {

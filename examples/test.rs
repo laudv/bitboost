@@ -49,8 +49,8 @@ pub fn main() {
 
     let tree = learner.into_tree();
     let pred = tree.predict(&dataset);
-    let eval = L2Loss::new().eval(dataset.target().get_raw_data().iter().cloned(),
-                                  pred.iter().cloned());
+    let eval = L2Loss::new().evaluate(dataset.target().get_raw_data().iter().cloned(),
+                                      pred.iter().cloned());
 
     println!("eval: {:e}", eval);
     println!("{:?}", tree);

@@ -10,6 +10,8 @@ macro_rules! try_or_str {
 pub type NumT = f32; // numeric type
 pub type NomT = u16; // nominal type
 
+pub const EPSILON: NumT = std::f32::EPSILON;
+
 pub mod config;
 pub mod dataset;
 pub mod bitblock;

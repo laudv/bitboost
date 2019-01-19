@@ -20,8 +20,12 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16], ntree
         card = np.random.randint(card_range[0], card_range[1])
         columns.append(np.random.randint(0, card, n))
 
+    output = np.zeros(n)
     for i in range(ntrees):
-        output = gen_output_for_columns(columns, max_depth)
+        output += gen_output_for_columns(n, columns, max_depth)
+
+    # add some noise
+    #output += 0.05 * np.random.randn(n)
 
     data = {}
     for (i, col) in enumerate(columns):
@@ -31,7 +35,7 @@ def gen_lowcard_nom_dataset(n, nattr, seed, max_depth, card_range=[2, 16], ntree
     frame = pandas.DataFrame(data = data)
     return frame
 
-def gen_output_for_columns(columns, max_depth):
+def gen_output_for_columns(n, columns, max_depth):
     # simulate a decision tree to generate output
     nattr = len(columns)
     print("nattr", nattr);
@@ -83,10 +87,7 @@ def gen_output_for_columns(columns, max_depth):
             print(" LEAF: node_id {} value {}".format(node_id, leaf_value))
             output[examples] = leaf_value
 
-    # add some noise
-    #output += 0.05 * np.random.randn(n)
-
-    return output
+    return np.array(output)
 
 
 
@@ -95,12 +96,13 @@ def gen_output_for_columns(columns, max_depth):
 
 if __name__ == "__main__":
     seed = 12
-    n = 100
-    attr = 4
+    n = 100000
+    attr = 16
     max_depth = 4
     card_range = [4, 5]
     compression = False
-    test_frac = 0.0
+    test_frac = 0.2
+    ntrees = 2
 
     #for attr in [4, 8, 16, 32, 64, 128, 256]:
     compr_opt = "gzip" if compression else None
@@ -110,7 +112,8 @@ if __name__ == "__main__":
     ftest = "/tmp/test{:03}-{}.csv{}".format(attr, n, compr_ext)
     frame = gen_lowcard_nom_dataset(int(n * (1.0+test_frac)), attr, seed,
             max_depth=max_depth,
-            card_range=card_range)
+            card_range=card_range,
+            ntrees=ntrees)
 
     print(ftrain)
     frame[0:n].to_csv(ftrain, header=True, index=False, compression=compr_opt)

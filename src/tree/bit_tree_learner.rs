@@ -118,6 +118,7 @@ pub struct TreeLearner<'a> {
     /// Storage for example selection masks.
     mask_store: BitBlockStore,
 
+
     /// Store for gradients
     gradient_store: BitBlockStore,
 
