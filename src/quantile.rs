@@ -88,16 +88,6 @@ impl ApproxQuantileStats {
         }
     }
 
-    /// Take the full float range; no need to feed.
-    pub fn full_range() -> ApproxQuantileStats {
-        ApproxQuantileStats {
-            neg_exp_min: 0x0,  // -0.0
-            neg_exp_max: 0xFF, // -Inf
-            pos_exp_min: 0x0,  // +0.0
-            pos_exp_max: 0xFF, // +Inf
-        }
-    }
-
     pub fn feed(&mut self, value: f32) {
         let bits = unsafe { transmute::<f32, u32>(value) };
         let exp = ((bits >> 23) & 0xFF) as u8;
@@ -136,7 +126,7 @@ impl ApproxQuantile {
             pos_exp_offset: 0x0, 
             neg_nbits_man: 3,
             pos_nbits_man: 3,
-            level1: vec![0; 4096], // both should fit in L1 cache
+            level1: vec![0; 4096+2], // two additional for zeros
             level2: vec![0; 2048],
             buffer: Vec::new(),
         }
@@ -175,26 +165,75 @@ impl ApproxQuantile {
         let sign = bits >> 31;
         let exp = ((bits >> 23) & 0xFF) as usize;
 
-        let index = if sign == 1 { // neg. value
+        if bits & 0x7FFFFFFF == 0 { // zeros (-0.0 and 0.0)
+            0x801-sign as usize
+        } else if sign == 1 { // neg. value
             let exp_index = self.neg_exp_range as usize - (exp - self.neg_exp_offset as usize);
             let bucket_base = (exp_index + 1) << self.neg_nbits_man;
             let sub_index = self.level1_sub_index(bits, self.neg_nbits_man);
             bucket_base - sub_index - 1
         } else { // pos. value
+            //println!("{:032b}", bits);
             let exp_index = exp - self.pos_exp_offset as usize;
             let bucket_base = exp_index << self.pos_nbits_man;
             let sub_index = self.level1_sub_index(bits, self.pos_nbits_man);
-            0x800 + bucket_base + sub_index
-        };
+            println!("level1_bucket: exp_index {}, sub_index {} value={}", exp_index, sub_index, value);
+            0x802 + bucket_base + sub_index
+        }
+    }
 
-        index
+    fn level1_prefix(&self, bucket: usize) -> u32 {
+        let bucket = bucket as u32;
+
+        if bucket == 0x800 || bucket == 0x801 { // zero buckets
+            (0x801 - bucket) << 31
+        } else if bucket < 0x800 { // negative
+            let exp_index = bucket >> self.neg_nbits_man;
+            let exp = self.neg_exp_range as u32 + self.neg_exp_offset as u32 - exp_index;
+            let sub_index = ((exp_index + 1) << self.neg_nbits_man) - bucket - 1;
+            ((0x100 | exp) << 23) | (sub_index << (23 - self.neg_nbits_man as u32))
+        } else { // positive
+            let bucket = bucket - 0x802;
+            let exp_index = bucket >> self.pos_nbits_man;
+            let exp = exp_index + self.pos_exp_offset as u32;
+            let sub_index = bucket % (1 << self.pos_nbits_man);
+            println!("level1_prefix: exp_index {}, sub_index {}, bucket {}", exp_index, sub_index, bucket);
+            (exp << 23) | (sub_index << (23 - self.pos_nbits_man as u32))
+        }
     }
 
     pub fn feed(&mut self, value: f32) {
         let bucket = self.level1_bucket(value);
-        //println!("index={}, bucket={} for {:.2e}", bucket >> 3, bucket, value);
+        let bits = unsafe { transmute::<f32, u32>(value) };
+        println!("{:032b} {:.4e}: bucket={}", bits, value, bucket);
         self.level1[bucket] += 1;
         self.count += 1;
+    }
+
+    pub fn stage2<'a>(&'a mut self, quantile: f32) -> ApproxQuantileStage2<'a> {
+        let rank = (self.count as f32 * quantile).round() as usize + 1;
+        let bucket = get_bucket_containing_rank(&self.level1, rank);
+        dbg!(rank);
+        dbg!(bucket);
+        unimplemented!()
+    }
+}
+
+pub struct ApproxQuantileStage2<'a> {
+    buffer: &'a mut Vec<f32>,
+    level2: &'a mut [f32],
+    bit_boundary: u8,
+    prefix: u32,
+}
+
+impl <'a> ApproxQuantileStage2<'a> {
+
+
+    pub fn feed(&mut self, value: f32) {
+        let bits = unsafe { transmute::<f32, u32>(value) };
+        if (bits >> self.bit_boundary) != self.prefix { return; }
+
+        println!("hi! {:032b}, {:.4e}", bits, value);
     }
 }
 
@@ -310,7 +349,6 @@ fn get_bucket_containing_rank(buckets: &[u32], rank: usize) -> (usize, usize) {
     let mut bucket = 0;
     dbg!(rank);
     loop {
-        debug_assert!(bucket < buckets.len());
         let bucket_size = buckets[bucket] as usize;
         accum += bucket_size;
         if accum >= rank { break; }
@@ -335,30 +373,95 @@ mod test {
         v.iter().for_each(|&x| s.feed(x));
 
         dbg!(&s);
-        panic!();
+
+        assert_eq!(s.neg_exp_min, 106);
+        assert_eq!(s.neg_exp_max, 126);
+        assert_eq!(s.pos_exp_min, 110);
+        assert_eq!(s.pos_exp_max, 125);
     }
 
-    //fn level1_bits() {
-    //    // negative numbers
-    //    for i in 1u32..256u32 {
-    //        let bits = 0b1_0000_0000 | (256-i);
-    //        let f = unsafe { std::mem::transmute::<u32, f32>(bits << 23) };
-    //        let bucket = ApproxQuantile::level1_bucket(f);
-    //        let prefix = ApproxQuantile::level1_prefix(i);
-    //        println!("-{:3}: {:09b} {:.5e}, bucket={}, prefix={:09b}", i, bits, f, bucket, prefix);
-    //        assert_eq!(i, bucket);
-    //        assert_eq!(bits, prefix);
-    //    }
+    #[test]
+    fn level1_prefix() {
+        let n = 4096;
+        let f = |i| {
+            let bits = (((i>>3) as u32) ^ 0b1_0000_0000) << 23;
+            let bits = bits | ((i as u32 & 0b111) << 20);
+            unsafe { transmute::<u32, f32>(bits) }
+        };
+        let v: Vec<f32> = (0..n).map(f).collect();
+        let q = ApproxQuantile::new();
 
-    //    // positive numbers
-    //    for i in 0u32..256u32 {
-    //        let f = unsafe { std::mem::transmute::<u32, f32>(i << 23) };
-    //        let bucket = ApproxQuantile::level1_bucket(f);
-    //        let prefix = ApproxQuantile::level1_prefix(i+256);
-    //        println!("+{:3}: {:09b} {:.5e}, bucket={}, prefix={:09b}", i, i, f, bucket, prefix);
-    //        assert_eq!(i+256, bucket);
-    //    }
-    //}
+        for &value in &v {
+            let bits = unsafe { transmute::<f32, u32>(value) };
+            let bucket = q.level1_bucket(value);
+            let prefix = q.level1_prefix(bucket);
+
+            println!("- {:032b} value={:.4e}", prefix, value);
+            println!("  {:032b} (check) bucket={}", bits, bucket);
+            println!("  {:032b} (bits)", bits);
+            assert_eq!(bits, prefix);
+        }
+    }
+
+    #[test]
+    fn level1_prefix_non_full() {
+        let fneg = |i| {
+            let bits = (((i>>3) as u32) ^ 0b1_0000_0000) << 23;
+            let bits = bits | ((i as u32 & 0b111) << 20);
+            unsafe { transmute::<u32, f32>(bits) }
+        };
+        let fpos = |i| {
+            let i = i as u32;
+            let exp =  ((i>>3) & 0b0_1110_0000) >> 5;
+            let man =  (i & 0b0_1111_1111) << 15;
+            let bits = ((exp + 127) << 23) | man;
+            unsafe { transmute::<u32, f32>(bits) }
+        };
+        let mut v1: Vec<f32> = (0..2048).map(fneg).collect();
+        let mut v2: Vec<f32> = (0..2048).map(fpos).collect();
+
+        let mut v = Vec::new();
+        v.append(&mut v1);
+        v.append(&mut v2);
+
+        {
+            let mut s = ApproxQuantileStats::new();
+            let mut q = ApproxQuantile::new();
+            v.iter().for_each(|&x| s.feed(x));
+            q.set_stats(&s);
+
+            for &value in &v {
+                let bits = unsafe { transmute::<f32, u32>(value) };
+                let bucket = q.level1_bucket(value);
+                let prefix = q.level1_prefix(bucket);
+
+                println!("- {:032b} value={:.4e}", prefix, value);
+                println!("  {:032b} (check) bucket={}", bits, bucket);
+                println!("  {:032b} (bits)", bits);
+                assert_eq!(bits, prefix);
+            }
+        }
+
+        v.iter_mut().for_each(|x| *x = -*x);
+
+        {
+            let mut s = ApproxQuantileStats::new();
+            let mut q = ApproxQuantile::new();
+            v.iter().for_each(|&x| s.feed(x));
+            q.set_stats(&s);
+
+            for &value in &v {
+                let bits = unsafe { transmute::<f32, u32>(value) };
+                let bucket = q.level1_bucket(value);
+                let prefix = q.level1_prefix(bucket);
+
+                println!("- {:032b} value={:.4e}", prefix, value);
+                println!("  {:032b} (check) bucket={}", bits, bucket);
+                println!("  {:032b} (bits)", bits);
+                assert_eq!(bits, prefix);
+            }
+        }
+    }
 
     #[test]
     fn basic_bucket0() {
@@ -374,7 +477,9 @@ mod test {
         v.iter().for_each(|&x| q.feed(x));
 
         for i in 0..n {
-            let j = if i < 256 { ((i+1) << 3) - 1 } else { i << 3 };
+            let j = if i < 256 { ((i+1) << 3) - 1 } else { (i << 3) + 2 };
+            if j == 2047 { continue; } // special bucket -0.0
+            if j == 2050 { continue; } // special bucket +0.0
             println!("j={} for i={}", j, i);
             let count = q.level1[j];
             assert_eq!(count, 1);
@@ -395,6 +500,8 @@ mod test {
         v.iter().for_each(|&x| q.feed(x));
 
         for i in 0..n {
+            if i == 2047 { continue; } // special bucket -0.0
+            if i == 2050 { continue; } // special bucket +0.0
             let count = q.level1[i];
             assert_eq!(count, 1);
         }
@@ -427,6 +534,8 @@ mod test {
         dbg!(q.pos_nbits_man);
 
         v.iter().for_each(|&x| q.feed(x));
+        q.feed(-0.0);
+        q.feed(0.0);
 
         for i in 0..n {
             let count = q.level1[i];
@@ -461,10 +570,13 @@ mod test {
             let mut q = ApproxQuantile::new();
             v.iter().for_each(|&x| s.feed(x));
             q.set_stats(&s);
+
             v.iter().for_each(|&x| q.feed(x));
+            q.feed(0.0);
 
             for i in 0..n {
-                let count = q.level1[i];
+                if i == 2047 { continue; }  // place where -0.0 would go if it didn't have a...
+                let count = q.level1[i];    // ...special bucket
                 assert_eq!(count, 1);
             }
         }
@@ -477,11 +589,51 @@ mod test {
             v.iter().for_each(|&x| s.feed(x));
             q.set_stats(&s);
             v.iter().for_each(|&x| q.feed(x));
+            q.feed(-0.0);
 
             for i in 0..n {
-                let count = q.level1[i];
+                if i == 2050 { continue; } // place where 0.0 would go if it didn't have a...
+                let count = q.level1[i];   // ...special bucket
+                //println!("i={}, count={}", i, count);
                 assert_eq!(count, 1);
             }
         }
+    }
+
+    #[test]
+    fn test_zeros() {
+        let mut q = ApproxQuantile::new();
+        let mut s = ApproxQuantileStats::new();
+        s.feed(0.0);
+        s.feed(-0.0);
+        s.feed(1.0);
+        s.feed(-1.0);
+        q.set_stats(&s);
+        
+        for &f in &[-0.0f32, 0.0f32] {
+            q.feed(f);
+            let bucket = q.level1_bucket(f);
+            let prefix = q.level1_prefix(bucket);
+            assert_eq!(prefix, unsafe { transmute::<f32, u32>(f) });
+        }
+
+        assert_eq!(q.level1[2047], 0); // "natural" bucket of -0.0 if -exp 0 in range
+        assert_eq!(q.level1[2050], 0); // "natural" bucket 0.0 if +exp 0 in range
+        assert_eq!(q.level1[2048], 1); // "special" bucket -0.0
+        assert_eq!(q.level1[2049], 1); // "special" bucket 0.0
+    }
+
+    #[test]
+    fn stage2() {
+        let n = 100;
+        let v: Vec<f32> = (0..n).map(|i| i as f32).collect();
+
+        let mut q = ApproxQuantile::new();
+        let mut s = ApproxQuantileStats::new();
+        v.iter().for_each(|&x| s.feed(x));
+        q.set_stats(&s);
+        v.iter().for_each(|&x| q.feed(x));
+
+        let q2 = q.stage2(0.5);
     }
 }
