@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 
 use fnv::FnvHashMap as HashMap;
 use num::Integer;
-use log::warn;
+use log::{warn, info};
 
 use crate::NumT;
 use crate::bitblock::{BitBlock, get_bit, set_bit, get_bitpos, get_blockpos};
@@ -159,12 +159,12 @@ where T: Clone {
         for i in 0..self.free.len() {
             let r = self.free[i];
             if r.1 - r.0 >= len {
-                //debug!("Reusing slice! #free = {}", self.free.len());
+                //info!("Reusing slice {:?} ({:?})! #free = {}", r, (r.0, r.0+len), self.free.len());
                 self.free.swap_remove(i);
 
                 // Re-initialize this, and return resized version
                 self.get_slice_mut(r).iter_mut().for_each(|x| *x = value.clone());
-                return (r.0, r.0 + len); // XXX actual length lost for next reuse!
+                return (r.0, r.0 + len);
             }
         }
 
@@ -280,6 +280,7 @@ where T: Clone + Default {
         }
     }
 
+    /// TODO remove
     pub fn sum_hist(&self, hists_range: SliceRange, feat_id: usize) -> T
     where T: Add<Output=T> + Default {
         let mut sum = T::default();
@@ -535,6 +536,51 @@ where B: Borrow<[BitBlock]> {
         assert!(indices.cast::<u32>().iter().all(|&i| (i as usize) < m));
         unsafe { self.count_ones_and_compr_unsafe(indices, other) }
     }
+
+    pub fn for_each_index<F>(&self, mut f: F)
+    where F: FnMut(usize) -> bool {
+        let n = self.block_len::<u64>();
+        assert!(n > 0);
+        let mut i = 0;
+        let mut mask = unsafe { *self.get_unchecked::<u64>(i) };
+
+        loop {
+            if mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                mask ^= 0x1 << j;
+                if f(j + 64 * i) { break; }
+            } else {
+                i += 1;
+                if i < n {
+                    mask = unsafe { *self.get_unchecked::<u64>(i) };
+                } else { break; }
+            }
+        }
+    }
+
+    pub fn for_each_index_compr<F>(&self, indices: &BitVec<B>, mut f: F)
+    where F: FnMut(usize) -> bool {
+        let n = self.block_len::<u32>();
+        assert!(n > 0);
+        assert_eq!(n, indices.block_len::<u32>());
+        let mut i = 0;
+        let mut index = unsafe { *indices.get_unchecked::<u32>(i) } as usize;
+        let mut mask = unsafe { *self.get_unchecked::<u32>(i) };
+
+        loop {
+            if mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                mask ^= 0x1 << j;
+                if f(j + 32 * index) { break; }
+            } else {
+                i += 1;
+                if i < n {
+                    mask = unsafe { *self.get_unchecked::<u32>(i) };
+                    index = unsafe { *indices.get_unchecked::<u32>(i) } as usize;
+                } else { break; }
+            }
+        }
+    }
 }
 
 impl <B> Deref for BitVec<B>
@@ -547,6 +593,8 @@ impl <B> DerefMut for BitVec<B>
 where B: Borrow<[BitBlock]> + BorrowMut<[BitBlock]> {
     fn deref_mut(&mut self) -> &mut [BitBlock] { self.blocks.borrow_mut() }
 }
+
+
 
 
 /// BitSlice memory layout.
@@ -848,6 +896,18 @@ mod test {
             assert_ne!(ptr0, ptr1);
             assert_eq!(ptr0, ptr2); // histograms reused
         }
+    }
+
+    #[test]
+    fn hist_sum() {
+        let cardinalities = vec![4, 6, 16];
+        let mut store = HistStore::<f32>::new(cardinalities.iter().cloned());
+
+        let r0 = store.alloc_hists();
+        store.get_hist_mut(r0, 2).iter_mut().enumerate().for_each(|(i, x)| *x = i as f32);
+        store.get_hist(r0, 2).iter().enumerate().for_each(|(i, &x)| assert!(x == i as f32));
+        store.get_hist(r0, 0).iter().for_each(|&x| assert_eq!(x, 0.0));
+        store.get_hist(r0, 1).iter().for_each(|&x| assert_eq!(x, 0.0));
     }
 
     #[test]
@@ -1267,5 +1327,38 @@ mod test {
         }
 
         assert!(all_equal);
+    }
+
+    #[test]
+    fn bitvec_for_each_index() {
+        let n = 10_000;
+        let f = |i| (123*i + 1001) % 7 == 0;
+        let mut store = BitBlockStore::new(16);
+        let r1 = store.alloc_from_bits_iter(n, (0..n).map(f));
+        let m = store.get_bitvec(r1).block_len::<u32>();
+        let r2 = store.alloc_from_iter(m, (0..m).map(|i| i as u32));
+        let r3 = store.alloc_from_iter(m, (0..m).map(|i| (i*10) as u32));
+        let bv = store.get_bitvec(r1); 
+        let indices1 = store.get_bitvec(r2); 
+        let indices2 = store.get_bitvec(r3); 
+
+        let mut res1 = Vec::new();
+        let mut res2 = Vec::new();
+        let mut res3 = Vec::new();
+        bv.for_each_index(|i| { res1.push(i); false });
+        bv.for_each_index_compr(&indices1, |i| { res2.push(i); false });
+        bv.for_each_index_compr(&indices2, |i| { res3.push(i); false });
+
+        let mut j = 0; // index into `bits`
+        for i in 0..n {
+            if j < res1.len() && res1[j] == i {
+                assert_eq!(f(i), true);
+                assert_eq!(res2[j], i);
+                assert_eq!(res3[j], 10*32*(i/32) + (i%32));
+                j += 1;
+            } else {
+                assert_eq!(f(i), false);
+            }
+        }
     }
 }
