@@ -105,6 +105,9 @@ impl ApproxQuantileStats {
     }
 }
 
+/// Approximate quantile estimator.
+/// Design choice: if neg_exp_min > 0: no bucket for -0.0 -> special bucket
+///                if pos_exp_min > 0: no bucket for -0.0 -> special bucket
 pub struct ApproxQuantile {
     count: u32,
     neg_exp_offset: u8,
@@ -112,9 +115,8 @@ pub struct ApproxQuantile {
     pos_exp_offset: u8,
     neg_nbits_man: u8,
     pos_nbits_man: u8,
-    level1: Vec<u32>, // max 4098 buckets, fits in L1 (12 bits of info)
-    level2: Vec<u32>,
-    buffer: Vec<f32>,
+    level1: Vec<u32>, // max 4098+2 buckets, fits in L1 (12 bits of info + 2 zero buckets)
+    level2: Vec<(u32, f32)>,
 }
 
 impl ApproxQuantile {
@@ -127,16 +129,14 @@ impl ApproxQuantile {
             neg_nbits_man: 3,
             pos_nbits_man: 3,
             level1: vec![0; 4096+2], // two additional for zeros
-            level2: vec![0; 2048],
-            buffer: Vec::new(),
+            level2: vec![(0, 0.0); 2048],
         }
     }
 
     pub fn reset(&mut self) {
         self.count = 0;
         self.level1.iter_mut().for_each(|x| *x = 0);
-        self.level2.iter_mut().for_each(|x| *x = 0);
-        self.buffer.clear();
+        self.level2.iter_mut().for_each(|x| *x = (0, 0.0));
     }
 
     pub fn set_stats(&mut self, stats: &ApproxQuantileStats) {
@@ -177,7 +177,7 @@ impl ApproxQuantile {
             let exp_index = exp - self.pos_exp_offset as usize;
             let bucket_base = exp_index << self.pos_nbits_man;
             let sub_index = self.level1_sub_index(bits, self.pos_nbits_man);
-            println!("level1_bucket: exp_index {}, sub_index {} value={}", exp_index, sub_index, value);
+            //println!("level1_bucket: exp_index {}, sub_index {} value={}", exp_index, sub_index, value);
             0x802 + bucket_base + sub_index
         }
     }
@@ -197,164 +197,121 @@ impl ApproxQuantile {
             let exp_index = bucket >> self.pos_nbits_man;
             let exp = exp_index + self.pos_exp_offset as u32;
             let sub_index = bucket % (1 << self.pos_nbits_man);
-            println!("level1_prefix: exp_index {}, sub_index {}, bucket {}", exp_index, sub_index, bucket);
+            //println!("level1_prefix: exp_index {}, sub_index {}, bucket {}", exp_index, sub_index, bucket);
             (exp << 23) | (sub_index << (23 - self.pos_nbits_man as u32))
+        }
+    }
+
+    /// MSB that we haven't considered in the sorting process
+    /// sign bit is bit 0
+    /// first exponent bit is bit 1
+    /// last exponent bit is bit 8
+    /// first mantissa bit is bit 9
+    fn level1_bit_boundary(&self, bucket: usize) -> u8 {
+        if bucket < 0x800 { // negative
+            23 - self.neg_nbits_man
+        } else { // positive
+            23 - self.pos_nbits_man
         }
     }
 
     pub fn feed(&mut self, value: f32) {
         let bucket = self.level1_bucket(value);
-        let bits = unsafe { transmute::<f32, u32>(value) };
-        println!("{:032b} {:.4e}: bucket={}", bits, value, bucket);
+        //let bits = unsafe { transmute::<f32, u32>(value) };
+        //println!("{:032b} {:.4e}: bucket={}", bits, value, bucket);
         self.level1[bucket] += 1;
         self.count += 1;
     }
 
     pub fn stage2<'a>(&'a mut self, quantile: f32) -> ApproxQuantileStage2<'a> {
-        let rank = (self.count as f32 * quantile).round() as usize + 1;
-        let bucket = get_bucket_containing_rank(&self.level1, rank);
+        let rank = ((self.count-1) as f32 * quantile).round() as usize; // first rank is 0
+        let iter = self.level1.iter().cloned();
+        let (bucket, rank_offset) = get_bucket_containing_rank(iter, rank, 0);
         dbg!(rank);
         dbg!(bucket);
-        unimplemented!()
+        dbg!(rank_offset);
+
+        let prefix = self.level1_prefix(bucket);
+        let bit_boundary = self.level1_bit_boundary(bucket);
+
+        ApproxQuantileStage2 {
+            level2: &mut self.level2,
+            bit_boundary,
+            prefix,
+            rank_offset,
+            rank,
+        }
     }
 }
 
 pub struct ApproxQuantileStage2<'a> {
-    buffer: &'a mut Vec<f32>,
-    level2: &'a mut [f32],
+    level2: &'a mut [(u32, f32)], // 2048 buckets (11 bits) of (count, sum) pairs
     bit_boundary: u8,
     prefix: u32,
+    rank_offset: usize,
+    rank: usize,
 }
 
 impl <'a> ApproxQuantileStage2<'a> {
 
+    fn level2_prefix_match(&self, bits: u32) -> bool {
+        let value_prefix = self.level1_prefix(bits);
+        //println!("value: {:032b}", value_prefix);
+        //println!("     : {:032b} {}", self.prefix, value_prefix == self.prefix);
+        value_prefix != self.prefix
+    }
+
+    fn level1_prefix(&self, bits: u32) -> u32 {
+        (bits >> self.bit_boundary) << self.bit_boundary
+    }
+
+    fn level2_bucket(&self, bits: u32) -> usize {
+        ((bits >> (self.bit_boundary-11)) & 0x7FF) as usize
+    }
 
     pub fn feed(&mut self, value: f32) {
         let bits = unsafe { transmute::<f32, u32>(value) };
-        if (bits >> self.bit_boundary) != self.prefix { return; }
+        if self.level2_prefix_match(bits) { return; }
 
-        println!("hi! {:032b}, {:.4e}", bits, value);
+        let bucket = self.level2_bucket(bits);
+        let p = &mut self.level2[bucket];
+        p.0 += 1;
+        p.1 += value;
+
+        //dbg!(bucket);
+        //dbg!(p);
+
+        println!("   value bits: {:b} for {:.1}", bits, value);
+        println!("actual prefix: {:b} (boundary={})", self.prefix >> self.bit_boundary, self.bit_boundary);
+        println!(" feed2 prefix: {:b} bucket: {:b} ({})", self.level1_prefix(bits) >> self.bit_boundary,
+                bucket, bucket);
+    }
+
+    pub fn get_approx_quantile(self) -> f32 {
+        let iter = self.level2.iter().map(|p| p.0);
+        let (bucket, _) = get_bucket_containing_rank(iter, self.rank, self.rank_offset);
+
+        println!("get_approx_quantile bucket: {}", bucket);
+
+        let p = self.level2[bucket];
+        p.1 / p.0 as f32
     }
 }
 
 
 
-
-
-
-//pub struct ApproxQuantile {
-//    count: u32,
-//    level1: Vec<u32>, // first 9 bits -> 512 buckets (sign + exponent bits)
-//    level2: Vec<u32>, // next 11 bits -> 2048 buckets
-//    buffer: Vec<f32>,
-//}
-//
-//impl ApproxQuantile {
-//    pub fn new() -> ApproxQuantile {
-//        ApproxQuantile {
-//            count: 0,
-//            level1: vec![0; 512],
-//            level2: vec![0; 2048],
-//            buffer: Vec::new(),
-//        }
-//    }
-//
-//    pub fn reset(&mut self) {
-//        self.count = 0;
-//        self.level1.iter_mut().for_each(|c| *c = 0);
-//        self.level2.iter_mut().for_each(|c| *c = 0);
-//        self.buffer.clear();
-//    }
-//
-//    fn level1_bucket(value: f32) -> u32 {
-//        let bits = unsafe { transmute::<f32, u32>(value) >> 23 }; // first 9 bits
-//        if bits & 0x100 == 0x100 { 512 - bits } // sign bit is 1
-//        else                     { bits + 256 }
-//    }
-//
-//    fn level1_prefix(bucket: u32) -> u32 {
-//        debug_assert!(0 < bucket && bucket < 512);
-//        if bucket < 256 { 512 - bucket }
-//        else            { bucket - 256 }
-//    }
-//
-//    pub fn feed(&mut self, value: f32) {
-//        debug_assert!(!value.is_nan());
-//        debug_assert!(!value.is_infinite());
-//        let bucket = Self::level1_bucket(value) as usize;
-//        debug_assert!(bucket < self.level1.len());
-//        unsafe { *self.level1.get_unchecked_mut(bucket) += 1 };
-//        self.count += 1;
-//    }
-//
-//    pub fn round2(&mut self, quantile: f32, eps: f32) -> ApproxQuantileRound2 {
-//        debug_assert!(0.0 <= quantile && quantile <= 1.0);
-//        let rank = 1 + (quantile * (self.count-1) as NumT).floor() as usize;
-//        let (bucket, sub_rank) = get_bucket_containing_rank(&self.level1, rank);
-//
-//        dbg!(bucket);
-//
-//        ApproxQuantileRound2 {
-//            eps,
-//            sub_rank: sub_rank as u32,
-//            prefix: Self::level1_prefix(bucket as u32),
-//            level2: &mut self.level2,
-//            buffer: &mut self.buffer,
-//        }
-//    }
-//}
-//
-//pub struct ApproxQuantileRound2<'a> {
-//    eps: f32,
-//    sub_rank: u32,
-//    prefix: u32,
-//    level2: &'a mut [u32],
-//    buffer: &'a mut Vec<f32>,
-//}
-//
-//impl <'a> ApproxQuantileRound2<'a> {
-//
-//    fn level2_bucket(value: f32) -> u32 {
-//        let bits = unsafe { transmute::<f32, u32>(value) };
-//        (bits >> 12) & 0x7ff
-//    }
-//
-//    pub fn feed(&mut self, value: f32) {
-//        let bits = unsafe { transmute::<f32, u32>(value) };
-//        //println!("{:09b} - {:09b} {}", bits >> 23, self.prefix, value);
-//        if (bits >> 23) ^ self.prefix != 0 { return; } // only values that were selected in round1
-//
-//        let bucket = Self::level2_bucket(value) as usize;
-//        debug_assert!(bucket < self.level2.len());
-//        self.level2[bucket] += 1;
-//        //unsafe { *self.level2.get_unchecked_mut(bucket) += 1 }
-//        self.buffer.push(value);
-//    }
-//
-//    pub fn get_quantile_value(&mut self) -> f32 {
-//        for i in 0..2048 {
-//            if self.level2[i] == 0 { continue; }
-//            println!("{:4}: {}", i, self.level2[i]);
-//        }
-//
-//        let (bucket, subsub_rank) = get_bucket_containing_rank(self.level2, self.sub_rank as usize);
-//
-//        unimplemented!()
-//    }
-//}
-
 /// Returns index of bucket and rank inside bucket
-fn get_bucket_containing_rank(buckets: &[u32], rank: usize) -> (usize, usize) {
-    let mut accum = 0;
+fn get_bucket_containing_rank<I>(mut buckets: I, rank: usize, rank_offset: usize) -> (usize, usize)
+where I: Iterator<Item = u32> {
+    let mut accum = rank_offset;
     let mut bucket = 0;
-    dbg!(rank);
-    loop {
-        let bucket_size = buckets[bucket] as usize;
-        accum += bucket_size;
-        if accum >= rank { break; }
+    while let Some(bucket_size) = buckets.next() {
+        let sum = accum + bucket_size as usize;
+        if sum > rank { break; }
+        accum = sum;
         bucket += 1;
     }
-    (bucket, accum - rank)
+    (bucket, accum)
 }
 
 
@@ -625,15 +582,49 @@ mod test {
 
     #[test]
     fn stage2() {
-        let n = 100;
-        let v: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let n = 20_000;
+        let v: Vec<f32> = (0..n).map(|i| 10.23 * i as f32).collect();
 
-        let mut q = ApproxQuantile::new();
         let mut s = ApproxQuantileStats::new();
         v.iter().for_each(|&x| s.feed(x));
-        q.set_stats(&s);
-        v.iter().for_each(|&x| q.feed(x));
 
-        let q2 = q.stage2(0.5);
+        for &quantile in &[0.0, 0.1, 0.2, 0.25, 0.3, 0.5, 0.75, 0.9, 1.0] {
+            let mut q = ApproxQuantile::new();
+            q.set_stats(&s);
+            v.iter().for_each(|&x| q.feed(x));
+
+            let mut q2 = q.stage2(quantile);
+            v.iter().for_each(|&x| q2.feed(x));
+
+            let median = q2.get_approx_quantile();
+            let real = v[((n-1) as f32 * quantile).round() as usize];
+            println!("n={}, quantile={}, median={} (real={})", n, quantile, median, real);
+            assert_eq!(median, real);
+        }
+    }
+
+    #[test]
+    fn stage2_rand() {
+        let n = 20_000;
+        let v: Vec<f32> = (0..n).map(|_| rand::random::<f32>()).collect();
+        let mut v_sort = v.clone();
+        v_sort.sort_by(|x, y| x.partial_cmp(y).unwrap());
+
+        let mut s = ApproxQuantileStats::new();
+        v.iter().for_each(|&x| s.feed(x));
+
+        for &quantile in &[0.0, 0.1, 0.2, 0.25, 0.3, 0.5, 0.75, 0.9, 1.0] {
+            let mut q = ApproxQuantile::new();
+            q.set_stats(&s);
+            v.iter().for_each(|&x| q.feed(x));
+
+            let mut q2 = q.stage2(quantile);
+            v.iter().for_each(|&x| q2.feed(x));
+
+            let median = q2.get_approx_quantile();
+            let real = v_sort[((n-1) as f32 * quantile).round() as usize];
+            println!("n={}, quantile={}, median={} (real={})", n, quantile, median, real);
+            assert_eq!(median, real);
+        }
     }
 }
