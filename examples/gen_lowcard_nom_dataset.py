@@ -96,8 +96,8 @@ def gen_output_for_columns(n, columns, max_depth):
 
 if __name__ == "__main__":
     seed = 12
-    n = 100000
-    attr = 16
+    n = 1000
+    attr = 4
     max_depth = 4
     card_range = [4, 5]
     compression = False

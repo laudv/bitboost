@@ -10,15 +10,19 @@ use crate::dataset::{Dataset, FeatureRepr};
 use crate::slice_store::{SliceRange, HistStore, BitBlockStore};
 use crate::slice_store::{BitVecRef};
 use crate::slice_store::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2, BitSliceLayout4};
+use crate::objective::Objective;
 
 struct Node2Split {
     /// The id of the node to split.
     node_id: usize,
 
-    /// Cache grad_sum and hess_sum to compute right stats given left stats.
+    /// Cache grad_sum to compute right stats given left stats.
     grad_sum: NumT,
-    hess_sum: NumT,
 
+    /// Cache example count to compute right stats given left stats.
+    example_count: usize,
+
+    /// True if this node2split has indices that aren't 0,1,2,3,... (some blocks skipped).
     compressed: bool,
 
     /// Range to lookup histograms in hist_store
@@ -40,7 +44,7 @@ impl Node2Split {
         Node2Split {
             node_id: node_id,
             grad_sum: 0.0,
-            hess_sum: 0.0,
+            example_count: 0,
             compressed: false,
             hists_range: hist_store.alloc_hists(),
             idx_range: (0, 0),
@@ -85,16 +89,6 @@ impl Sub for HistVal {
     }
 }
 
-impl Add for HistVal {
-    type Output = HistVal;
-    fn add(self, other: HistVal) -> HistVal {
-        HistVal {
-            grad: self.grad + other.grad,
-            hess: self.hess + other.hess,
-        }
-    }
-}
-
 pub struct LearnerResources {
     hist_store: HistStore<HistVal>,
     index_store: BitBlockStore,
@@ -125,7 +119,7 @@ pub struct TreeLearner<'a> {
     dataset: &'a Dataset,
     gradients: &'a [NumT],
     tree: Tree,
-    grad_bounds: (NumT, NumT),
+    objective: Box<dyn Objective>,
 
     /// Storage for histograms.
     hist_store: &'a mut HistStore<HistVal>,
@@ -152,7 +146,7 @@ pub struct TreeLearner<'a> {
 
 impl <'a> TreeLearner<'a> {
     pub fn new(config: &'a Config, data: &'a Dataset, gradients: &'a [NumT],
-               grad_bounds: (NumT, NumT), r: &'a mut LearnerResources)
+               objective: Box<dyn Objective>, r: &'a mut LearnerResources)
         -> Self
     {
         let tree = Tree::new(config.max_tree_depth);
@@ -167,7 +161,7 @@ impl <'a> TreeLearner<'a> {
             dataset: data,
             gradients,
             tree,
-            grad_bounds,
+            objective,
 
             hist_store: &mut r.hist_store,
             index_store: &mut r.index_store,
@@ -187,8 +181,6 @@ impl <'a> TreeLearner<'a> {
         let mut stack = Vec::<Node2Split>::with_capacity(max_depth * 2);
 
         let root_n2s = self.get_root_node2split();
-        self.tree.set_root_value(self.get_best_value(root_n2s.grad_sum, root_n2s.hess_sum));
-
         stack.push(root_n2s);
 
         while let Some(n2s) = stack.pop() {
@@ -198,19 +190,18 @@ impl <'a> TreeLearner<'a> {
             if split_opt.is_none() { debug!("N{:03} no split", node_id); continue; }
 
             let split = split_opt.unwrap();
-            let (feat_id, feat_val) = split.split_crit.unpack_eqtest().expect("not an EqTest");
 
             //self.debug_print_split(&n2s, &split);
 
             // Enqueue children to be split if they are not leaves
             if !self.tree.is_max_leaf_node(self.tree.left_child(node_id)) {
-                let val_masks = self.dataset.features()[feat_id].get_bitvec(feat_val).unwrap();
-                let (left_n2s, right_n2s) = self.get_left_right_node2split(&n2s, val_masks);
+                let (left_n2s, right_n2s) = self.get_left_right_node2split(&n2s, &split);
 
                 // Schedule the left and right children to be split
                 stack.push(right_n2s);
                 stack.push(left_n2s);
             }
+            // TODO else { for each child, optimize leaf value }
 
             // Set tree node values
             let left_value = self.get_best_value(split.left_grad_sum, split.left_hess_sum);
@@ -222,6 +213,10 @@ impl <'a> TreeLearner<'a> {
             self.hist_store.free_hists(n2s.hists_range);
             self.mask_store.free_blocks(n2s.mask_range);
         }
+
+        // emergency test: no splits were found and we don't have a proper leaf value
+        // TODO handle this situation better
+        assert!(self.tree.nnodes() > 1);
     }
 
     fn find_best_split(&mut self, n2s: &Node2Split) -> Option<Split> {
@@ -231,8 +226,8 @@ impl <'a> TreeLearner<'a> {
         //print!("N{:03}: ", n2s.node_id);
         //self.hist_store.debug_print(n2s.hists_range);
 
-        let (pgrad, phess) = (n2s.grad_sum, n2s.hess_sum);
-        let ploss = self.get_loss(pgrad, phess);
+        let (pgrad, pcount) = (n2s.grad_sum, n2s.example_count);
+        let ploss = self.get_loss(pgrad, pcount);
 
         for feat_id in 0..self.dataset.nfeatures() {
             let hist = self.hist_store.get_hist(n2s.hists_range, feat_id);
@@ -255,7 +250,7 @@ impl <'a> TreeLearner<'a> {
                 if gain > best_gain {
                     best_gain = gain;
                     best_split = Some(Split { 
-                        split_crit: SplitCrit::EqTest(feat_id, feat_val as u16),
+                        split_crit: SplitCrit::CatEqTest(feat_id, feat_val as u16),
                         left_grad_sum: lgrad,
                         left_hess_sum: lhess,
                         right_grad_sum: rgrad,
@@ -272,15 +267,19 @@ impl <'a> TreeLearner<'a> {
         (self.get_root_n2s_fun)(self)
     }
 
-    fn get_left_right_node2split(&mut self, parent_n2s: &Node2Split, fval_mask: BitVecRef)
+    fn get_left_right_node2split(&mut self, parent_n2s: &Node2Split, split: &Split)
         -> (Node2Split, Node2Split)
     {
+        let (feat_id, feat_val) = split.split_crit.unpack_eqtest().expect("not an CatEqTest");
+        let fval_mask = self.dataset.features()[feat_id].get_bitvec(feat_val).unwrap();
+
         let left_id = self.tree.left_child(parent_n2s.node_id);
         let right_id = self.tree.right_child(parent_n2s.node_id);
 
         let mut left_n2s = self.split_examples(parent_n2s, left_id, &fval_mask, |m| m);
         self.build_histograms(&left_n2s);
-        let (grad_sum, hess_sum) = self.hist_store.sum_hist(left_n2s.hists_range, 0).unpack();
+        let (grad_sum, hess_sum) = self.hist_store.sum_hist(left_n2s.hists_range, 0).unpack(); // only for eq. splits?
+        println!("get_left_right: grad_sum {}, hess_sum {}", grad_sum, hess_sum);
         left_n2s.grad_sum = grad_sum;
         left_n2s.hess_sum = hess_sum;
 
@@ -358,14 +357,15 @@ impl <'a> TreeLearner<'a> {
             right_n2s.hists_range);
     }
 
-    fn get_loss(&self, grad_sum: NumT, hess_sum: NumT) -> NumT {
+    fn get_loss(&self, grad_sum: NumT, example_count: usize) -> NumT {
         let lambda = self.config.reg_lambda;
-        -0.5 * ((grad_sum * grad_sum) / (hess_sum + lambda))
+        -0.5 * ((grad_sum * grad_sum) / (example_count as NumT + lambda))
     }
 
-    fn get_best_value(&self, grad_sum: NumT, hess_sum: NumT) -> NumT {
+    // TODO move; only necessary for L2 without leaf optimization!
+    fn get_best_value(&self, grad_sum: NumT, example_count: usize) -> NumT {
         let lambda = self.config.reg_lambda;
-        -grad_sum / (hess_sum + lambda)
+        -grad_sum / (example_count as NumT + lambda)
     }
 
     pub fn into_tree(self) -> Tree {
@@ -391,7 +391,7 @@ impl <'a> TreeLearner<'a> {
     fn debug_print_split_generic<BSL>(&self, n2s: &Node2Split, split: &Split)
     where BSL: BitSliceLayout {
         let nid = n2s.node_id;
-        let bounds = self.grad_bounds;
+        let bounds = self.objective.get_bounds();
         let (feat_id, feat_val) = split.split_crit.unpack_eqtest().unwrap();
 
         let ems_bitset = self.mask_store.get_bitvec(n2s.mask_range);
@@ -450,6 +450,7 @@ impl <'a> TreeLearner<'a> {
 macro_rules! get_root_node2split {
     ($f:ident, $bsl:ident) => {
         fn $f(l: &mut TreeLearner) -> Node2Split {
+            let range      = l.objective.get_bounds();
             let nexamples  = l.dataset.nexamples();
             let grad_range = l.gradient_store.alloc_zero_bitslice::<$bsl>(nexamples);
             let mask_range = l.mask_store.alloc_one_bits(nexamples);
@@ -460,7 +461,7 @@ macro_rules! get_root_node2split {
             {
                 let mut slice = l.gradient_store.get_bitslice_mut::<$bsl>(grad_range);
                 for (i, &v) in l.gradients.iter().enumerate() {
-                    slice.set_scaled_value(i, v, l.grad_bounds);
+                    slice.set_scaled_value(i, v, range);
                 }
             }
 
@@ -470,7 +471,7 @@ macro_rules! get_root_node2split {
             n2s.grad_range = grad_range;
 
             l.build_histograms(&n2s);
-            let (grad_sum, hess_sum) = l.hist_store.sum_hist(n2s.hists_range, 0).unpack();
+            let (grad_sum, hess_sum) = l.hist_store.sum_hist(n2s.hists_range, 0).unpack(); // XXX only for eq.splits
             n2s.grad_sum = grad_sum;
             n2s.hess_sum = hess_sum;
             n2s
@@ -561,6 +562,7 @@ macro_rules! get_grad_and_hess_sums {
     ($f:ident, $bsl:ident, naive) => {
         fn $f(l: &TreeLearner, n2s: &Node2Split, fval_mask: &BitVecRef) -> (NumT, NumT)
         {
+            let bounds     = l.objective.get_bounds();
             let ems_bitset = l.mask_store.get_bitvec(n2s.mask_range);
             let idx_bitset = l.index_store.get_bitvec(n2s.idx_range);
 
@@ -582,7 +584,7 @@ macro_rules! get_grad_and_hess_sums {
 
                 for k in 0..32 {
                     if m >> k & 0x1 == 0x1 {
-                        sum1 += gradients.get_scaled_value(i*32 + k, l.grad_bounds);
+                        sum1 += gradients.get_scaled_value(i*32 + k, bounds);
                         count1 += 1;
                     }
                 }
@@ -601,6 +603,7 @@ macro_rules! get_grad_and_hess_sums {
             fn sum_uncompr(l: &TreeLearner, n2s: &Node2Split, fval_mask: &BitVecRef)
                 -> (NumT, NumT)
             {
+                let bounds = l.objective.get_bounds();
                 let ems = l.mask_store.get_bitvec(n2s.mask_range);
                 let gradients = l.gradient_store.get_bitslice::<$bsl>(n2s.grad_range);
 
@@ -611,7 +614,7 @@ macro_rules! get_grad_and_hess_sums {
                 let sum = unsafe {
                     gradients.sum_all_masked2_unsafe(&ems, &fval_mask)
                 };
-                let sum = $bsl::linproj(sum as NumT, count, l.grad_bounds);
+                let sum = $bsl::linproj(sum as NumT, count, bounds);
 
                 (sum, hess)
             }
@@ -619,6 +622,7 @@ macro_rules! get_grad_and_hess_sums {
             fn sum_compr(l: &TreeLearner, n2s: &Node2Split, fval_mask: &BitVecRef)
                 -> (NumT, NumT)
             {
+                let bounds = l.objective.get_bounds();
                 let ems = l.mask_store.get_bitvec(n2s.mask_range);
                 let gradients = l.gradient_store.get_bitslice::<$bsl>(n2s.grad_range);
                 let indices = l.index_store.get_bitvec(n2s.idx_range);
@@ -630,7 +634,7 @@ macro_rules! get_grad_and_hess_sums {
                 let sum = unsafe {
                     gradients.sum_all_masked2_compr_unsafe(&indices, &ems, &fval_mask)
                 };
-                let sum = $bsl::linproj(sum as NumT, count, l.grad_bounds);
+                let sum = $bsl::linproj(sum as NumT, count, bounds);
 
                 (sum, hess)
             }

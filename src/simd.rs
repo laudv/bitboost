@@ -3,7 +3,7 @@ use std::arch::x86_64::*;
 
 use crate::bitblock::BitBlock;
 
-// get_grad_and_hess_sums
+// get_grad_sum
 //   - uncompressed / compresed
 //   - width: 1, 2, 4
 //
@@ -26,6 +26,7 @@ unsafe fn count_ones_u64(v: __m256i) -> __m256i {
     _mm256_load_si256(counts.as_ptr() as *const __m256i)
 }
 
+#[allow(dead_code)]
 unsafe fn count_ones_u32(v: __m256i) -> __m256i {
     let mut buffer = BitBlock::zeros(); // 64 byte aligned!
     let mut counts = BitBlock::zeros();
@@ -127,6 +128,7 @@ macro_rules! harvey_seal_64 {
     }}
 }
 
+#[allow(unused_macros)]
 macro_rules! harvey_seal_32 {
     ( $data:expr, $nblocks:expr, $load_fn:ident, $reduce_fn:ident ) => {{
         let (d, mut i, n, mut total, b01, b02, b04, b08) = 

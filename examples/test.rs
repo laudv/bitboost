@@ -1,13 +1,11 @@
 use std::env;
 use std::time::Instant;
 
-use spdyboost::config::{Config, Learner};
+use spdyboost::config::Config;
 use spdyboost::NumT;
 use spdyboost::dataset::Dataset;
-use spdyboost::tree::baseline_tree_learner::TreeLearner as BaselineLearner;
-use spdyboost::tree::bit_tree_learner::TreeLearner as BitTreeLearner;
-use spdyboost::tree::loss::{L2Loss, LossFunGrad};
-use spdyboost::tree::eval::Evaluator;
+use spdyboost::tree_learner::{TreeLearner, TreeLearnerContext};
+use spdyboost::objective::{L2, Objective};
 
 pub fn main() {
     pretty_env_logger::init();
@@ -19,45 +17,43 @@ pub fn main() {
     config.discr_nbits = 1;
     config.compression_threshold = 0.75;
     //config.compression_threshold = 1.0;
-    //config.learner = Learner::Baseline;
-    config.learner = Learner::BitLearner;
-
-    let grad_bounds = (-1.0, 1.0);
 
     let args: Vec<String> = env::args().collect();
     let filename = args.get(1).expect("no data file given");
 
     let dataset = Dataset::from_csv_file(&config, filename).expect("data error");
-    let target = dataset.target().get_raw_data();
-    let loss = L2Loss::new();
-    let gradients: Vec<NumT> = target.iter().map(|&v| loss.eval_grad(v, 0.0)).collect();
+    let targets = dataset.target().get_raw_data();
+    let predictions = vec![0.0; targets.len()];
 
     // Timings
     let r = 20;
+    let mut context = TreeLearnerContext::new(&config, &dataset);
+    let objective: Box<dyn Objective> = Box::new(L2::new(&targets, &predictions));
     let now = Instant::now();
     for _ in 0..r {
-        let mut learner = BitTreeLearner::new(&config, &dataset, &gradients, grad_bounds);
-        learner.train();
+        let learner = TreeLearner::new(&mut context, objective.as_ref());
+        let _tree = learner.train();
     }
     let elapsed = now.elapsed();
     println!("TRAINED IN {} ms", (elapsed.as_secs() as f32 * 1e3 +
              elapsed.subsec_micros() as f32 * 1e-3) / r as f32);
 
     // Results
-    let mut learner = BitTreeLearner::new(&config, &dataset, &gradients, grad_bounds);
-    learner.train();
+    //let mut learner = TreeLearner::new(&config, &dataset, &gradients, grad_bounds,
+    //                                   &mut context);
+    //learner.train();
 
-    let tree = learner.into_tree();
-    let pred = tree.predict(&dataset);
-    let eval = L2Loss::new().evaluate(dataset.target().get_raw_data().iter().cloned(),
-                                      pred.iter().cloned());
+    //let tree = learner.into_tree();
+    //let pred = tree.predict(&dataset);
+    //let eval = L2Loss::new().evaluate(dataset.target().get_raw_data().iter().cloned(),
+    //                                  pred.iter().cloned());
 
-    println!("eval: {:e}", eval);
-    println!("{:?}", tree);
+    //println!("eval: {:e}", eval);
+    //println!("{:?}", tree);
 
-    println!("writing results...");
-    write_results(&pred).expect("writing failed");
-    println!("done");
+    //println!("writing results...");
+    //write_results(&pred).expect("writing failed");
+    //println!("done");
 }
 
 use std::fs::File;

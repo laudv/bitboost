@@ -1,10 +1,5 @@
 use crate::NumT;
 
-pub enum Learner {
-    Baseline,
-    BitLearner,
-}
-
 pub struct Config {
 
     // Dataset
@@ -16,12 +11,11 @@ pub struct Config {
     pub categorical_columns: Vec<usize>,
 
     // Tree
-    pub learner: Learner,
     pub max_tree_depth: usize,
     pub reg_lambda: NumT,
-    pub min_sum_hessian: NumT,
-    pub bagging_fraction: NumT,
+    pub min_examples_leaf: u32,
     pub min_gain: NumT,
+    pub nbuckets: usize,
 
     pub discr_nbits: usize,
 
@@ -46,12 +40,11 @@ impl Config {
 
             categorical_columns: Vec::new(),
 
-            learner: Learner::BitLearner,
             max_tree_depth: 4,
             reg_lambda: 0.0,
-            min_sum_hessian: 1.0,
-            bagging_fraction: 1.0,
+            min_examples_leaf: 1,
             min_gain: 0.0,
+            nbuckets: 128,
 
             discr_nbits: 4,
 

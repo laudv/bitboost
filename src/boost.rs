@@ -83,12 +83,12 @@ impl <'a> Booster<'a> {
         tree.set_bias(bias);
         tree.set_shrinkage(self.config.learning_rate);
 
-        if self.config.optimize_leaf_values {
-            let tree_target_iter = self.targets.iter().cloned()
-                .zip(self.predictions.iter().cloned())
-                .map(|(t, p)| t-p);
-            tree.optimize_leaf_values(self.dataset, tree_target_iter);
-        }
+        //if self.config.optimize_leaf_values {
+        //    let tree_target_iter = self.targets.iter().cloned()
+        //        .zip(self.predictions.iter().cloned())
+        //        .map(|(t, p)| t-p);
+        //    tree.optimize_leaf_values(self.dataset, tree_target_iter);
+        //}
 
         self.update_predictions(&tree);
         self.ensemble.push_tree(tree);

@@ -8,8 +8,6 @@ macro_rules! try_or_str {
 }
 
 pub type NumT = f32; // numeric type
-pub type NomT = u16; // nominal type
-
 pub const EPSILON: NumT = std::f32::EPSILON;
 
 pub mod config;
@@ -18,5 +16,7 @@ pub mod bitblock;
 pub mod simd;
 pub mod slice_store;
 pub mod tree;
-pub mod boost;
+pub mod tree_learner;
+pub mod objective;
+//pub mod boost;
 pub mod quantile;

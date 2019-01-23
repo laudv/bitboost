@@ -3,7 +3,7 @@ use std::borrow::{Borrow, BorrowMut};
 use std::fmt::Debug;
 use std::mem::{size_of, align_of};
 use std::ptr;
-use std::ops::{Sub, Add, Deref, DerefMut};
+use std::ops::{Sub, Deref, DerefMut};
 use std::slice;
 use std::marker::PhantomData;
 
@@ -13,7 +13,7 @@ use log::{warn, info};
 
 use crate::NumT;
 use crate::bitblock::{BitBlock, get_bit, set_bit, get_bitpos, get_blockpos};
-use crate::dataset::{Dataset, FeatureRepr};
+use crate::dataset::Dataset;
 use crate::simd;
 
 pub type SliceRange = (u32, u32);
@@ -237,13 +237,7 @@ where T: Clone + Default {
     pub fn for_dataset(dataset: &Dataset) -> Self {
         // Use the right amount of 'buckets' for each feature
         // Currently only categorical features; one bucket for each cat. feat. value.
-        Self::new(dataset.features().iter().map(|f| {
-            match f.get_repr() {
-                Some(&FeatureRepr::CatFeature(card, _)) => card as u32,
-                Some(&FeatureRepr::BitVecFeature(ref f)) => f.card as u32,
-                _ => panic!("feat repr not supported by histogram"),
-            }
-        }))
+        Self::new(dataset.features().iter().map(|f| f.get_nbuckets() as u32 ))
     }
 
     fn get_histogram_range(&self, feat_id: usize) -> (usize, usize) {
@@ -280,25 +274,13 @@ where T: Clone + Default {
         }
     }
 
-    /// TODO remove
-    pub fn sum_hist(&self, hists_range: SliceRange, feat_id: usize) -> T
-    where T: Add<Output=T> + Default {
-        let mut sum = T::default();
-        let hist = self.get_hist(hists_range, feat_id);
-        for v in hist {
-            sum = sum + v.clone();
-        }
-        sum
-    }
-
     pub fn debug_print(&self, hists_range: SliceRange)
-    where T: Debug + Add<Output=T> + Default {
+    where T: Debug {
         println!("Histograms");
         for feat_id in 0..self.hist_layout.len()-1 {
             for (i, val) in self.get_hist(hists_range, feat_id).iter().enumerate() {
                 println!("{:4}: {:?}", i, val);
             }
-            println!("-- +: {:?}", self.sum_hist(hists_range, feat_id));
             println!();
         }
     }
@@ -705,7 +687,8 @@ where B: Borrow<[BitBlock]>,
         L::linproj(self.get_value(index) as NumT, 1.0, bounds)
     }
 
-    pub fn set_scaled_value(&mut self, index: usize, value: NumT, (lo, hi): (NumT, NumT))
+    /// Returns the discretized value
+    pub fn set_scaled_value(&mut self, index: usize, value: NumT, (lo, hi): (NumT, NumT)) -> u8
     where B: BorrowMut<[BitBlock]> {
         let maxval = (L::nunique_values() - 1) as NumT;
         let v0 = NumT::min(hi, NumT::max(lo, value));
@@ -713,6 +696,7 @@ where B: Borrow<[BitBlock]>,
         let v2 = v1.round() as u8;
         //println!("{}, {}", x, v2);
         self.set_value(index, v2);
+        v2
     }
 
     pub fn copy_block_from<I, BO>(&mut self, other: &BitSlice<BO, L>, from: usize, to: usize)
