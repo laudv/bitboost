@@ -8,7 +8,7 @@ use std::slice;
 use std::marker::PhantomData;
 
 use fnv::FnvHashMap as HashMap;
-use num::Integer;
+use num::{Integer, PrimInt};
 use log::{warn, info};
 
 use crate::NumT;
@@ -563,6 +563,112 @@ where B: Borrow<[BitBlock]> {
             }
         }
     }
+
+    pub fn for_each_index_and<F>(&self, other: &BitVec<B>, mut f: F)
+    where F: FnMut(usize) -> bool {
+        let n = self.block_len::<u64>();
+        assert!(n > 0);
+        assert_eq!(n, other.block_len::<u64>());
+        let mut i = 0;
+        let mask1 = unsafe { *self.get_unchecked::<u64>(i) };
+        let mask2 = unsafe { *other.get_unchecked::<u64>(i) };
+        let mut mask = mask1 & mask2;
+
+        loop {
+            if mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                mask ^= 0x1 << j;
+                if f(j + 64 * i) { break; }
+            } else {
+                i += 1;
+                if i < n {
+                    let mask1 = unsafe { *self.get_unchecked::<u64>(i) };
+                    let mask2 = unsafe { *other.get_unchecked::<u64>(i) };
+                    mask = mask1 & mask2;
+                } else { break; }
+            }
+        }
+    }
+
+    /// index into `other` using values in `indices` (not 'local' ones).
+    pub fn for_each_index_and_compr<F>(&self, other: &BitVec<B>, indices: &BitVec<B>, mut f: F)
+    where F: FnMut(usize) -> bool {
+        let n = self.block_len::<u32>();
+        assert!(n > 0);
+        assert!(n <= other.block_len::<u32>());
+        assert_eq!(n, indices.block_len::<u32>());
+        let mut i = 0;
+        let mut index = unsafe { *indices.get_unchecked::<u32>(i) } as usize;
+        let mask1 = unsafe { *self.get_unchecked::<u32>(i) };
+        let mask2 = unsafe { *other.get_unchecked::<u32>(index) };
+        let mut mask = mask1 & mask2;
+
+        loop {
+            if mask != 0 {
+                let j = mask.trailing_zeros() as usize;
+                mask ^= 0x1 << j;
+                if f(j + 32 * index) { break; }
+            } else {
+                i += 1;
+                if i < n {
+                    index = unsafe { *indices.get_unchecked::<u32>(i) } as usize;
+                    let mask1 = unsafe { *self.get_unchecked::<u32>(i) };
+                    let mask2 = unsafe { *other.get_unchecked::<u32>(index) };
+                    mask = mask1 & mask2;
+                } else { break; }
+            }
+        }
+    }
+
+    pub fn index_iter<'a>(&'a self) -> impl Iterator<Item = usize> + 'a {
+        IndexIter::new(self, |_| !0u64, |i| i, |x| x)
+    }
+
+    pub fn index_iter_compr<'a>(&'a self, indices: &'a BitVec<B>)
+        -> impl Iterator<Item = usize> + 'a
+    {
+        assert_eq!(self.block_len::<u32>(), indices.block_len::<u32>());
+        let index_f = move |i| unsafe { *indices.get_unchecked::<u32>(i) } as usize;
+        IndexIter::new(self, |_| !0u32, index_f, |x| x)
+    }
+
+    pub fn index_iter_and<'a>(&'a self, mask: &'a BitVec<B>)
+        -> impl Iterator<Item = usize> + 'a
+    {
+        assert_eq!(self.block_len::<u64>(), mask.block_len::<u64>());
+        let mask_f = move |i| unsafe { *mask.get_unchecked::<u64>(i) };
+        IndexIter::new(self, mask_f, |i| i, |x| x)
+    }
+
+    pub fn index_iter_and_compr<'a>(&'a self, mask: &'a BitVec<B>, indices: &'a BitVec<B>)
+        -> impl Iterator<Item = usize> + 'a
+    {
+        assert_eq!(self.block_len::<u32>(), indices.block_len::<u32>());
+        assert!(self.block_len::<u32>() <= mask.block_len::<u32>());
+
+        let mask_f = move |i| *mask.get::<u32>(i);
+        let index_f = move |i| unsafe { *indices.get_unchecked::<u32>(i) } as usize;
+        IndexIter::new(self, mask_f, index_f, |x| x)
+    }
+
+    pub fn index_iter_andnot<'a>(&'a self, mask: &'a BitVec<B>)
+        -> impl Iterator<Item = usize> + 'a
+    {
+        assert_eq!(self.block_len::<u64>(), mask.block_len::<u64>());
+        let mask_f = move |i| unsafe { *mask.get_unchecked::<u64>(i) };
+        IndexIter::new(self, mask_f, |i| i, |x| !x)
+    }
+
+    pub fn index_iter_andnot_compr<'a>(&'a self, mask: &'a BitVec<B>, indices: &'a BitVec<B>)
+        -> impl Iterator<Item = usize> + 'a
+    {
+        assert_eq!(self.block_len::<u32>(), indices.block_len::<u32>());
+        assert!(self.block_len::<u32>() <= mask.block_len::<u32>());
+
+        let mask_f = move |i| *mask.get::<u32>(i);
+        let index_f = move |i| unsafe { *indices.get_unchecked::<u32>(i) } as usize;
+        IndexIter::new(self, mask_f, index_f, |x| !x)
+    }
 }
 
 impl <B> Deref for BitVec<B>
@@ -576,6 +682,78 @@ where B: Borrow<[BitBlock]> + BorrowMut<[BitBlock]> {
     fn deref_mut(&mut self) -> &mut [BitBlock] { self.blocks.borrow_mut() }
 }
 
+
+
+
+
+pub struct IndexIter<'a, B, T, MaskF, IndexF, F>
+where B: 'a + Borrow<[BitBlock]>,
+      T: 'a + PrimInt + Integer,
+      MaskF: 'a + Fn(usize) -> T,
+      IndexF: 'a + Fn(usize) -> usize,
+      F: 'a + Fn(T) -> T,
+{
+    bitvec: &'a BitVec<B>,
+    mask_f: MaskF,
+    index_f: IndexF,
+    f: F,
+
+    n: usize, // length of `bitvec`
+    i: usize, // index into `bitvec`
+    j: usize, // index into `mask_f` generated by `index_f`
+    mask: T,
+}
+
+impl <'a, B, T, MaskF, IndexF, F> Iterator for IndexIter<'a, B, T, MaskF, IndexF, F>
+where B: 'a + Borrow<[BitBlock]>,
+      T: 'a + PrimInt + Integer,
+      MaskF: 'a + Fn(usize) -> T,
+      IndexF: 'a + Fn(usize) -> usize,
+      F: 'a + Fn(T) -> T,
+{
+    type Item = usize;
+    fn next(&mut self) -> Option<usize> {
+        loop {
+            if self.mask != T::zero() {
+                let k = self.mask.trailing_zeros() as usize;
+                self.mask = self.mask ^ T::from(1u64 << k).unwrap();
+                return Some(k + size_of::<T>() * 8 * self.j);
+            } else if self.i < self.n {
+                self.j = (self.index_f)(self.i);
+                println!("new index {} [{}]", self.j, self.i);
+                let mask1 = unsafe { *self.bitvec.get_unchecked::<T>(self.i) };
+                let mask2 = (self.mask_f)(self.j);
+                self.mask = mask1 & (self.f)(mask2);
+                self.i += 1;
+            } else { return None; }
+        }
+    }
+}
+
+impl <'a, B, T, MaskF, IndexF, F> IndexIter<'a, B, T, MaskF, IndexF, F>
+where B: 'a + Borrow<[BitBlock]>,
+      T: 'a + PrimInt + Integer,
+      MaskF: 'a + Fn(usize) -> T,
+      IndexF: 'a + Fn(usize) -> usize,
+      F: 'a + Fn(T) -> T,
+{
+    fn new(bitvec: &'a BitVec<B>, mask_f: MaskF, index_f: IndexF, f: F) -> Self {
+        let n = bitvec.block_len::<T>();
+        assert!(n > 0);
+
+        IndexIter {
+            bitvec,
+            mask_f,
+            index_f,
+            f,
+
+            n,
+            i: 0,
+            j: 0,
+            mask: T::zero(),
+        }
+    }
+}
 
 
 
@@ -1319,21 +1497,29 @@ mod test {
         let f = |i| (123*i + 1001) % 7 == 0;
         let mut store = BitBlockStore::new(16);
         let r1 = store.alloc_from_bits_iter(n, (0..n).map(f));
+        let r2 = store.alloc_from_bits_iter(11*n, (0..11*n).map(f));
         let m = store.get_bitvec(r1).block_len::<u32>();
-        let r2 = store.alloc_from_iter(m, (0..m).map(|i| i as u32));
-        let r3 = store.alloc_from_iter(m, (0..m).map(|i| (i*10) as u32));
-        let bv = store.get_bitvec(r1); 
-        let indices1 = store.get_bitvec(r2); 
-        let indices2 = store.get_bitvec(r3); 
+        let r3 = store.alloc_from_iter(m, (0..m).map(|i| i as u32));
+        let r4 = store.alloc_from_iter(m, (0..m).map(|i| (i*10) as u32));
+        let bv1 = store.get_bitvec(r1); 
+        let bv2 = store.get_bitvec(r2); 
+        let indices1 = store.get_bitvec(r3); 
+        let indices2 = store.get_bitvec(r4); 
 
         let mut res1 = Vec::new();
         let mut res2 = Vec::new();
         let mut res3 = Vec::new();
-        bv.for_each_index(|i| { res1.push(i); false });
-        bv.for_each_index_compr(&indices1, |i| { res2.push(i); false });
-        bv.for_each_index_compr(&indices2, |i| { res3.push(i); false });
+        let mut res4 = Vec::new();
+        let mut res5 = Vec::new();
+        let mut res6 = Vec::new();
+        bv1.for_each_index(|i| { res1.push(i); false });
+        bv1.for_each_index_compr(&indices1, |i| { res2.push(i); false });
+        bv1.for_each_index_compr(&indices2, |i| { res3.push(i); false });
+        bv1.for_each_index_and(&bv1, |i| { res4.push(i); false });
+        bv1.for_each_index_and_compr(&bv1, &indices1, |i| { res5.push(i); false });
+        bv1.for_each_index_and_compr(&bv2, &indices2, |i| { res6.push(i); false });
 
-        let mut j = 0; // index into `bits`
+        let mut j = 0; // index into res vecs
         for i in 0..n {
             if j < res1.len() && res1[j] == i {
                 assert_eq!(f(i), true);
@@ -1344,5 +1530,81 @@ mod test {
                 assert_eq!(f(i), false);
             }
         }
+
+        assert_eq!(res1, res4);
+        assert_eq!(res1, res5);
+
+        let mut s = 0;
+        for (i, &j) in indices2.cast::<u32>().iter().enumerate() {
+            let m1 = bv1.get::<u32>(i);
+            let m2 = bv2.get::<u32>(j as usize);
+            let m = m1 & m2;
+            for k in 0..32 {
+                if m & (1 << k) != 0 {
+                    assert_eq!(res6[s], (32*j+k) as usize);
+                    s += 1;
+                }
+            }
+        }
+        assert_eq!(s, res6.len());
+    }
+
+    #[test]
+    fn bitvec_index_iter() {
+        let n = 100_000;
+        let f = |i| (123*i + 1001) % 7 == 0;
+        let mut store = BitBlockStore::new(16);
+        let r1 = store.alloc_from_bits_iter(n, (0..n).map(f));
+        let r2 = store.alloc_from_bits_iter(11*n, (0..11*n).map(f));
+        let m = store.get_bitvec(r1).block_len::<u32>();
+        let r3 = store.alloc_from_iter(m, (0..m).map(|i| i as u32));
+        let r4 = store.alloc_from_iter(m, (0..m).map(|i| (i*10) as u32));
+        let bv1 = store.get_bitvec(r1); 
+        let bv2 = store.get_bitvec(r2); 
+        let indices1 = store.get_bitvec(r3); 
+        let indices2 = store.get_bitvec(r4); 
+
+        let res1: Vec<usize> = bv1.index_iter().collect();
+        let res2: Vec<usize> = bv1.index_iter_compr(&indices1).collect();
+        let res3: Vec<usize> = bv1.index_iter_compr(&indices2).collect();
+        let res4: Vec<usize> = bv1.index_iter_and(&bv1).collect();
+        let res5: Vec<usize> = bv1.index_iter_and_compr(&bv1, &indices1).collect();
+        let res6: Vec<usize> = bv1.index_iter_and_compr(&bv2, &indices2).collect();
+        let res7: Vec<usize> = bv1.index_iter_andnot_compr(&bv2, &indices2).collect();
+
+        let mut j = 0; // index into res vecs
+        for i in 0..n {
+            if j < res1.len() && res1[j] == i {
+                assert_eq!(f(i), true);
+                assert_eq!(res2[j], i);
+                assert_eq!(res3[j], 10*32*(i/32) + (i%32));
+                j += 1;
+            } else {
+                assert_eq!(f(i), false);
+            }
+        }
+
+        assert_eq!(res1, res4);
+        assert_eq!(res1, res5);
+
+        let mut s = 0;
+        let mut snot = 0;
+        for (i, &j) in indices2.cast::<u32>().iter().enumerate() {
+            let m1 = bv1.get::<u32>(i);
+            let m2 = bv2.get::<u32>(j as usize);
+            let m = m1 & m2;
+            let mnot = m1 & !m2;
+            for k in 0..32 {
+                if m & (1 << k) != 0 {
+                    assert_eq!(res6[s], (32*j+k) as usize);
+                    s += 1;
+                }
+                if mnot & (1 << k) != 0 {
+                    assert_eq!(res7[snot], (32*j+k) as usize);
+                    snot += 1;
+                }
+            }
+        }
+        assert_eq!(s, res6.len());
     }
 }
