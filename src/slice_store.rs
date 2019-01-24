@@ -30,7 +30,7 @@ where T: Clone {
     _marker: PhantomData<T>,
 
     capacity: usize,
-    elem_align: usize,
+    byte_align: usize,
     len: usize,
 
     /// Freed slices: very simple design, but allows simple memory reuse w/o reallocation.
@@ -43,16 +43,25 @@ where T: Clone {
 impl <T> SliceStore<T>
 where T: Clone {
 
+    fn get_byte_align() -> usize {
+        let mut byte_align = align_of::<T>();
+        while byte_align < size_of::<T>() { byte_align *= 2; }
+        byte_align
+    }
+
+    fn get_elem_align(&self) -> usize {
+        debug_assert!(self.byte_align % align_of::<T>() == 0);
+        self.byte_align / align_of::<T>()
+    }
+
     pub fn new(initial_cap: usize) -> Self {
-        let align = usize::max(align_of::<T>(), size_of::<T>());
-        Self::aligned(initial_cap, align)
+        Self::aligned(initial_cap, Self::get_byte_align())
     }
 
     pub fn aligned(initial_cap: usize, byte_align: usize) -> Self {
-        assert!(byte_align % size_of::<T>() == 0, "invalid alignment");
+        assert!(byte_align % align_of::<T>() == 0, "invalid alignment");
         assert!(!std::mem::needs_drop::<T>());
 
-        let elem_align = byte_align / size_of::<T>();
         let ptr = unsafe { Self::alloc(initial_cap, byte_align) };
 
         SliceStore {
@@ -64,7 +73,7 @@ where T: Clone {
 
             slice_ends: HashMap::default(),
             free: Vec::new(),
-            elem_align,
+            byte_align,
         }
     }
 
@@ -81,11 +90,10 @@ where T: Clone {
         assert!(new_cap > self.capacity);
         let old_nbytes = self.capacity * size_of::<T>();
         let new_nbytes = new_cap * size_of::<T>();
-        let byte_align = self.elem_align * size_of::<T>();
-        let layout = alloc::Layout::from_size_align(old_nbytes, byte_align).unwrap();
+        let layout = alloc::Layout::from_size_align(old_nbytes, self.byte_align).unwrap();
         let ptr = alloc::realloc(self.ptr as *mut u8, layout, new_nbytes) as *mut T;
         if ptr.is_null() { panic!("out of memory (realloc)"); }
-        assert!(ptr as usize % byte_align == 0);
+        assert!(ptr as usize % self.byte_align == 0);
 
         warn!("realloc capacity {} -> {}", self.capacity, new_cap);
 
@@ -121,8 +129,7 @@ impl <T> Drop for SliceStore<T>
 where T: Clone {
     fn drop(&mut self) {
         let nbytes = self.capacity * size_of::<T>();
-        let byte_align = self.elem_align * size_of::<T>();
-        let layout = alloc::Layout::from_size_align(nbytes, byte_align).unwrap();
+        let layout = alloc::Layout::from_size_align(nbytes, self.byte_align).unwrap();
         unsafe {
             alloc::dealloc(self.ptr as *mut u8, layout);
         }
@@ -169,14 +176,15 @@ where T: Clone {
         }
 
         // allocate new memory in buffer
+        let elem_align = self.get_elem_align();
         let old_len_unaligned = self.len;
-        let m = old_len_unaligned % self.elem_align;
+        let m = old_len_unaligned % elem_align;
         let old_len = if m == 0 { old_len_unaligned }
-                      else { old_len_unaligned + self.elem_align - m };
+                      else { old_len_unaligned + elem_align - m };
         let new_len = old_len + len as usize;
 
         assert!(new_len < u32::max_value() as usize);
-        debug_assert!(self.ptr as usize % (self.elem_align * size_of::<T>()) == 0);
+        debug_assert!(self.ptr as usize % self.byte_align == 0);
 
         self.resize(new_len, value);
         let slice_start = old_len as u32;
