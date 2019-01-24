@@ -5,18 +5,21 @@ use spdyboost::config::Config;
 use spdyboost::NumT;
 use spdyboost::dataset::Dataset;
 use spdyboost::tree_learner::{TreeLearner, TreeLearnerContext};
-use spdyboost::objective::{L2, Objective};
+use spdyboost::objective::Objective;
+use spdyboost::objective;
 
 pub fn main() {
     pretty_env_logger::init();
 
     let mut config = Config::new();
     config.target_feature_id = -1;
-    config.categorical_columns = (0..256).collect();
-    config.max_tree_depth = 6;
+    config.categorical_columns = (0..16).collect();
+    config.optimize_leaf_values = true;
+    config.max_tree_depth = 10;
     config.discr_nbits = 1;
-    config.compression_threshold = 0.75;
-    //config.compression_threshold = 1.0;
+    //config.compression_threshold = 0.5;
+    config.compression_threshold = 1.0;
+    config.min_gain = 0.001;
 
     let args: Vec<String> = env::args().collect();
     let filename = args.get(1).expect("no data file given");
@@ -26,12 +29,14 @@ pub fn main() {
     let predictions = vec![0.0; targets.len()];
 
     // Timings
-    let r = 20;
+    let r = 1;
     let mut context = TreeLearnerContext::new(&config, &dataset);
-    let objective: Box<dyn Objective> = Box::new(L2::new(&targets, &predictions));
+    //let mut l2 = objective::L2::new(); l2.initialize(&targets, &predictions);
+    let mut l1 = objective::L1::new(); l1.initialize(&targets, &predictions);
+    let mut objective: Box<dyn Objective> = Box::new(l1);
     let now = Instant::now();
     for _ in 0..r {
-        let learner = TreeLearner::new(&mut context, objective.as_ref());
+        let learner = TreeLearner::new(&mut context, objective.as_mut());
         let _tree = learner.train();
     }
     let elapsed = now.elapsed();

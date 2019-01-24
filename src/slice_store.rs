@@ -720,7 +720,6 @@ where B: 'a + Borrow<[BitBlock]>,
                 return Some(k + size_of::<T>() * 8 * self.j);
             } else if self.i < self.n {
                 self.j = (self.index_f)(self.i);
-                println!("new index {} [{}]", self.j, self.i);
                 let mask1 = unsafe { *self.bitvec.get_unchecked::<T>(self.i) };
                 let mask2 = (self.mask_f)(self.j);
                 self.mask = mask1 & (self.f)(mask2);
@@ -1607,4 +1606,51 @@ mod test {
         }
         assert_eq!(s, res6.len());
     }
+
+    //#[test]
+    //fn bitvec_iter_speed() {
+    //    use std::time::Instant;
+
+    //    let n = 10_000_000;
+    //    let k = 2;
+    //    let f = |i| (123*i + 1001) % 7 == 0;
+    //    let mut store = BitBlockStore::new(16);
+    //    let r1 = store.alloc_from_bits_iter(n, (0..n).map(f));
+    //    let r2 = store.alloc_from_bits_iter(n, (1..n+1).map(f));
+    //    let m = store.get_bitvec(r1).block_len::<u32>();
+    //    let r3 = store.alloc_from_iter(m, (0..m).map(|i| i as u32));
+
+    //    let bv1 = store.get_bitvec(r1);
+    //    let bv2 = store.get_bitvec(r2);
+    //    let idxs = store.get_bitvec(r3);
+
+    //    let now = Instant::now();
+    //    for _ in 0..k { let _ = bv1.index_iter().max(); }
+    //    println!("time iter   : {}", now.elapsed().subsec_micros());
+
+    //    let now = Instant::now();
+    //    let v: Vec<usize> = bv1.index_iter().collect();
+    //    for _ in 0..k { let _ = v.iter().max();  }
+    //    println!("time collect: {}", now.elapsed().subsec_micros());
+    //    
+    //    let now = Instant::now();
+    //    for _ in 0..k { let _ = bv1.index_iter_and(&bv2).max(); }
+    //    println!("time and iter   : {}", now.elapsed().subsec_micros());
+
+    //    let now = Instant::now();
+    //    let v: Vec<usize> = bv1.index_iter_and(&bv2).collect();
+    //    for _ in 0..k { let _ = v.iter().max();  }
+    //    println!("time and collect: {}", now.elapsed().subsec_micros());
+
+    //    let now = Instant::now();
+    //    for _ in 0..k { let _ = bv1.index_iter_and_compr(&bv2, &idxs).max(); }
+    //    println!("time and compr iter   : {}", now.elapsed().subsec_micros());
+
+    //    let now = Instant::now();
+    //    let v: Vec<usize> = bv1.index_iter_and_compr(&bv2, &idxs).collect();
+    //    for _ in 0..k { let _ = v.iter().max();  }
+    //    println!("time and compr collect: {}", now.elapsed().subsec_micros());
+
+    //    panic!();
+    //}
 }

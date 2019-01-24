@@ -164,8 +164,13 @@ pub struct NumFeatureSplitter {
 
 impl NumFeatureSplitter {
 
-    /// Get bucket representative
-    pub fn get_value(&self, bucket_id: usize) -> NumT {
+    /// Get bucket representative.
+    pub fn get_value(&self, fval_id: usize) -> NumT {
+        unimplemented!()
+    }
+
+    /// Get mask for given bucket.
+    pub fn get_bitvec(&self, fval_id: usize) -> BitVecRef {
         unimplemented!()
     }
 }
