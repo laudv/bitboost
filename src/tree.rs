@@ -34,11 +34,11 @@ impl SplitCrit {
         }
     }
 
-    pub fn for_feature(f: &Feature, fval_id: usize) -> SplitCrit {
+    pub fn for_feature(f: &Feature, split_value: NumT) -> SplitCrit {
         match f.get_feature_type() {
-            FeatureType::NomCat(ref bs) => Self::cat_eq(f.id(), bs.get_value(fval_id)),
-            FeatureType::OrdCat(ref bs) => Self::cat_lt(f.id(), bs.get_value(fval_id)),
-            FeatureType::OrdNum(ref sp) => Self::num_lt(f.id(), sp.get_value(fval_id)),
+            FeatureType::NomCat(_) => Self::cat_eq(f.id(), split_value),
+            FeatureType::OrdCat(_) => Self::cat_lt(f.id(), split_value),
+            FeatureType::OrdNum(_) => Self::num_lt(f.id(), split_value),
             _ => panic!("uninitialized feature used in tree"),
         }
     }
@@ -68,7 +68,7 @@ impl SplitCrit {
     }
 
     pub fn is_no_split(&self) -> bool {
-        self.split_type ==  SplitType::NoSplit
+        self.split_type == SplitType::NoSplit
     }
 }
 

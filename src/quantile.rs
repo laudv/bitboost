@@ -1,71 +1,7 @@
-use std::borrow::{Borrow, BorrowMut};
+use std::mem::{transmute, size_of};
+use std::ops::{Add};
 
-use crate::NumT;
-
-
-// Paper:
-// Zhang, Qi, and Wei Wang. "A fast algorithm for approximate quantiles in high speed data
-// streams." Scientific and Statistical Database Management, 2007. SSBDM'07. 19th International
-// Conference on. IEEE, 2007.
-//
-// Also see: https://github.com/jasonge27/fastQuantile (MIT license)
-
-//struct SummaryElem {
-//    rmin: u32,
-//    rmax: u32,
-//    elem: NumT,
-//}
-//
-//struct Summary<B>
-//where B: Borrow<[SummaryElem]> {
-//    elems: B,
-//}
-//
-//impl <B> Summary<B>
-//where B: Borrow<[SummaryElem]> {
-//    pub fn quantile(&self, q: NumT) -> SummaryElem {
-//        unimplemented!();
-//    }
-//
-//}
-//
-//pub struct FixedLengthSummary {
-//    eps: NumT,
-//    blocksz: usize,
-//    nlevels: usize,
-//    levels: Vec<SummaryElem>,
-//    len: usize,
-//}
-//
-//impl FixedLengthSummary {
-//    pub fn new(n: usize, eps: NumT) -> FixedLengthSummary {
-//        let nf = n as NumT;
-//        let blocksz = ((eps * nf).log2() / eps).floor() as usize;
-//        let nlevels = (nf * eps).log2().ceil() as usize;
-//        unimplemented!()
-//    }
-//
-//    fn get_level(&self, i: usize) -> &[SummaryElem] {
-//        assert!(i < self.nlevels);
-//        let lo = i * self.blocksz;
-//        let hi = (i+1) * self.blocksz;
-//        &self.levels[lo..hi]
-//    }
-//
-//    fn get_level_mut(&mut self, i: usize) -> &mut [SummaryElem] {
-//        assert!(i < self.nlevels);
-//        let lo = i * self.blocksz;
-//        let hi = (i+1) * self.blocksz;
-//        &mut self.levels[lo..hi]
-//    }
-//}
-
-
-
-
-// ------------------------------------------------------------------------------------------------
-
-use std::mem::transmute;
+use num::Num;
 
 // f32 = [ 1 sign | 8 exp | 23 mantissa = 11 + 12 ]
 
@@ -313,6 +249,29 @@ where I: Iterator<Item = u32> {
     }
     (bucket, accum)
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -11,6 +11,7 @@ use crate::NumT;
 use crate::bitblock::BitBlock;
 use crate::config::Config;
 use crate::slice_store::{BitBlockStore, BitVecRef, BitVecMut, SliceRange};
+use crate::quantile::ApproxQuantileStats;
 
 
 
@@ -23,7 +24,7 @@ pub enum FeatureType {
     Uninitialized,
 
     /// A regular numerical feature, uses `raw_data` -> NumLt splits
-    OrdNum(NumFeatureSplitter),
+    OrdNum(NumFeatureSplitInfo),
 
     /// Ordered categorical feature -> CatLt splits
     OrdCat(FeatureBitVecs),
@@ -158,21 +159,11 @@ impl FeatureBitVecs {
     }
 }
 
-pub struct NumFeatureSplitter {
-
+pub struct NumFeatureSplitInfo {
+    pub stats: ApproxQuantileStats,
 }
 
-impl NumFeatureSplitter {
-
-    /// Get bucket representative.
-    pub fn get_value(&self, fval_id: usize) -> NumT {
-        unimplemented!()
-    }
-
-    /// Get mask for given bucket.
-    pub fn get_bitvec(&self, fval_id: usize) -> BitVecRef {
-        unimplemented!()
-    }
+impl NumFeatureSplitInfo {
 }
 
 

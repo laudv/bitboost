@@ -18,5 +18,7 @@ pub mod slice_store;
 pub mod tree;
 pub mod tree_learner;
 pub mod objective;
-//pub mod boost;
 pub mod quantile;
+pub mod hist;
+pub mod splitter;
+//pub mod boost;
