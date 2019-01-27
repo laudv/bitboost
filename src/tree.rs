@@ -34,15 +34,6 @@ impl SplitCrit {
         }
     }
 
-    pub fn for_feature(f: &Feature, split_value: NumT) -> SplitCrit {
-        match f.get_feature_type() {
-            FeatureType::NomCat(_) => Self::cat_eq(f.id(), split_value),
-            FeatureType::OrdCat(_) => Self::cat_lt(f.id(), split_value),
-            FeatureType::OrdNum(_) => Self::num_lt(f.id(), split_value),
-            _ => panic!("uninitialized feature used in tree"),
-        }
-    }
-
     pub fn cat_eq(feature_id: usize, split_value: NumT) -> SplitCrit {
         SplitCrit {
             split_type: SplitType::CatEq,

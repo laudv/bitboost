@@ -11,7 +11,7 @@ use crate::NumT;
 use crate::bitblock::BitBlock;
 use crate::config::Config;
 use crate::slice_store::{BitBlockStore, BitVecRef, BitVecMut, SliceRange};
-use crate::quantile::ApproxQuantileStats;
+use crate::binner;
 
 
 
@@ -24,7 +24,7 @@ pub enum FeatureType {
     Uninitialized,
 
     /// A regular numerical feature, uses `raw_data` -> NumLt splits
-    OrdNum(NumFeatureSplitInfo),
+    OrdNum(NumFeatureInfo),
 
     /// Ordered categorical feature -> CatLt splits
     OrdCat(FeatureBitVecs),
@@ -40,9 +40,6 @@ pub struct Feature {
     /// Feature type and their additional representations
     feat_type: FeatureType,
 
-    /// Number of split positions (cardinality for cat. features, #split cand. for numerical).
-    nbuckets: usize,
-
     /// The column number of the feature in the dataset.
     colnum: usize,
 
@@ -54,11 +51,10 @@ pub struct Feature {
 }
 
 impl Feature {
-    fn new(colnum: usize, nbuckets: usize, name: String, raw_data: Vec<NumT>) -> Feature {
+    fn new(colnum: usize, name: String, raw_data: Vec<NumT>) -> Feature {
         Feature {
             id: 0,
             feat_type: FeatureType::Uninitialized,
-            nbuckets,
             colnum,
             name,
             raw_data,
@@ -73,6 +69,24 @@ impl Feature {
     pub fn get_value(&self, i: usize) -> NumT { self.raw_data[i] }
 
     pub fn get_raw_data(&self) -> &[NumT] { &self.raw_data }
+
+    pub fn get_nbins(&self) -> usize {
+        use FeatureType::*;
+        match &self.feat_type {
+            Uninitialized => panic!("uninitialized feature"),
+            NomCat(bitvecs) | OrdCat(bitvecs) => bitvecs.card,
+            OrdNum(info) => info.nbins,
+        }
+    }
+
+    pub fn get_limits(&self) -> (NumT, NumT) {
+        use FeatureType::*;
+        match &self.feat_type {
+            Uninitialized => panic!("uninitialized feature"),
+            NomCat(bitvecs) | OrdCat(bitvecs) => (0.0, bitvecs.card as NumT),
+            OrdNum(info) => info.limits,
+        }
+    }
 
     fn get_categories(&self) -> (HashMap<i64, usize>, Vec<NumT>) {
         let mut set = HashSet::<i64>::new();
@@ -112,6 +126,7 @@ impl Feature {
         }
 
         let mut bitvecs = FeatureBitVecs {
+            card,
             value_map,
             ranges,
             store,
@@ -125,28 +140,34 @@ impl Feature {
         }
 
         self.feat_type = FeatureType::NomCat(bitvecs);
-        self.nbuckets = card;
     }
 
-    fn gen_num_splitters(&mut self) {
-        //self.feat_type = FeatureType::OrdNum(NumFeatureSplitter::new())
-        unimplemented!()
+    fn gen_num_splitters(&mut self, max_nbins: usize) {
+        let min_value = self.raw_data.iter().fold( 1.0 / 0.0, |x: NumT, &y| x.min(y));
+        let max_value = self.raw_data.iter().fold(-1.0 / 0.0, |x: NumT, &y| x.max(y));
+
+        // NOTE we could use some sort of optimial nbins estimation; just max for now
+        let num_feat_info = NumFeatureInfo {
+            nbins: max_nbins,
+            limits: (min_value, max_value),
+        };
+
+        self.feat_type = FeatureType::OrdNum(num_feat_info);
     }
 
     pub fn get_feature_type(&self) -> &FeatureType { &self.feat_type }
-    pub fn get_nbuckets(&self) -> usize { self.nbuckets }
 }
 
 pub struct FeatureBitVecs {
+    card: usize,
     value_map: Vec<NumT>, // fval_id -> value
     ranges: Vec<SliceRange>,
     store: BitBlockStore,
 }
 
 impl FeatureBitVecs {
-    pub fn get_value(&self, fval_id: usize) -> NumT {
-        self.value_map[fval_id]
-    }
+    pub fn get_value(&self, fval_id: usize) -> NumT { self.value_map[fval_id] }
+    pub fn get_card(&self) -> usize { self.card }
 
     pub fn get_bitvec(&self, fval_id: usize) -> BitVecRef {
         let range = self.ranges[fval_id];
@@ -159,11 +180,20 @@ impl FeatureBitVecs {
     }
 }
 
-pub struct NumFeatureSplitInfo {
-    pub stats: ApproxQuantileStats,
+pub struct NumFeatureInfo {
+    nbins: usize,
+    limits: (NumT, NumT),
 }
 
-impl NumFeatureSplitInfo {
+impl NumFeatureInfo {
+
+    pub fn get_nbins(&self) -> usize { self.nbins } 
+    pub fn get_limits(&self) -> (NumT, NumT) { self.limits }
+
+    pub fn get_value(&self, fval_id: usize) -> NumT {
+        // we do +1 because we want the right edge of the bin
+        binner::linpol(self.limits, fval_id + 1, self.nbins)
+    }
 }
 
 
@@ -188,7 +218,6 @@ impl Dataset {
     pub fn from_csv<R>(config: &Config, mut reader: R) -> Result<Dataset, String>
     where R: BufRead {
         let sep = config.csv_separator;
-        let nbuckets = config.nbuckets;
         let mut feature_names = Self::csv_parse_header(config, &mut reader)?;
         let mut raws = Vec::new();
         let start = Instant::now();
@@ -223,7 +252,7 @@ impl Dataset {
         // Construct features
         feature_names.resize(raws.len(), String::new());
         let mut features = raws.into_iter().zip(feature_names).enumerate()
-            .map(|(i, (r, n))| Feature::new(i, nbuckets, n, r))
+            .map(|(i, (r, n))| Feature::new(i, n, r))
             .collect::<Vec<Feature>>();
         let target = features.remove(target_id);
 
@@ -278,12 +307,13 @@ impl Dataset {
         info!("Added {} categorical feature representations", ncat);
 
         // Remaining unitialized features are numerical
+        let max_nbins = config.nsplits_cands;
         for feature in dataset.features.iter_mut() {
             match feature.get_feature_type() {
                 FeatureType::Uninitialized => {},
                 _ => { continue; } // skip all features that are not uninitialized
             }
-            feature.gen_num_splitters();
+            feature.gen_num_splitters(max_nbins);
         }
 
         Ok(())

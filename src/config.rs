@@ -15,7 +15,7 @@ pub struct Config {
     pub reg_lambda: NumT,
     pub min_examples_leaf: u32,
     pub min_gain: NumT,
-    pub nbuckets: usize,
+    pub nsplits_cands: usize,
 
     pub discr_nbits: usize,
 
@@ -44,7 +44,7 @@ impl Config {
             reg_lambda: 0.0,
             min_examples_leaf: 1,
             min_gain: 0.0,
-            nbuckets: 128,
+            nsplits_cands: 16,
 
             discr_nbits: 4,
 

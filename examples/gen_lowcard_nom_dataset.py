@@ -2,6 +2,7 @@ import random
 import numpy as np
 import pandas
 
+binary = [ 0.0, 1.0 ]
 output_values1 = [ -1.0, 1.0 ]
 output_values2 = [ -1.0, -0.33333333333333337, 0.33333333333333326, 1.0 ]
 output_values4 = [-1.0, -0.8666666666666667, -0.7333333333333334, -0.6,
@@ -82,8 +83,9 @@ def gen_output_for_columns(n, columns, max_depth):
             node_ids.append(2 * node_id + 2)
             node_ids.append(2 * node_id + 1)
         else:
-            #leaf_value = np.random.rand()
-            leaf_value = random.choice(output_values1)
+            leaf_value = 2 * np.random.rand() - 1
+            #leaf_value = random.choice(output_values1)
+            #leaf_value = random.choice(binary)
             print(" LEAF: node_id {} value {}".format(node_id, leaf_value))
             output[examples] = leaf_value
 

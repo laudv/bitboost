@@ -1,7 +1,6 @@
 use crate::NumT;
 use crate::config::Config;
-
-use crate::quantile::{ApproxQuantileStats, ApproxQuantile};
+use crate::binner::Binner;
 
 pub trait Objective {
     fn name(&self) -> &'static str;
@@ -19,7 +18,7 @@ pub trait Objective {
 
 
 
-// ------------------------------------------------------------------------------------------------
+// - Least squares --------------------------------------------------------------------------------
 
 pub struct L2 {
     gradients: Vec<NumT>,
@@ -81,20 +80,22 @@ impl Objective for L2 {
 
 
 
-// ------------------------------------------------------------------------------------------------
+// - L1 -- least absolute deviation ---------------------------------------------------------------
 
 pub struct L1 {
-    quantile_est: ApproxQuantile,
+    bins: Vec<u32>,
     gradients: Vec<NumT>,
     bias: NumT,
+    limits: (NumT, NumT),
 }
 
 impl L1 {
     pub fn new() -> L1 {
         L1 {
-            quantile_est: ApproxQuantile::new(),
+            bins: vec![0; 2048], // fits in L1
             gradients: Vec::new(),
             bias: 0.0,
+            limits: (0.0, 0.0),
         }
     }
 }
@@ -108,29 +109,44 @@ impl Objective for L1 {
     fn initialize(&mut self, targets: &[NumT], predictions: &[NumT]) {
         assert_eq!(targets.len(), predictions.len());
         let n = targets.len();
-        let mut stats = ApproxQuantileStats::new();
+        let (mut min, mut max) = (1.0 / 0.0, -1.0 / 0.0);
         self.gradients.resize(n, 0.0);
         
         for i in 0..n {
-            let err = targets[i] - predictions[i];
-            stats.feed(err);
+            let target = targets[i];
+            let err = target - predictions[i];
+            min = target.min(min);
+            max = target.max(max);
             self.gradients[i] = -err.signum();
         }
 
-        self.quantile_est.set_stats(&stats);
+        self.limits = (min, max);
     }
 
     fn predict_leaf_value(&mut self, targets: &[NumT], examples: &[usize]) -> NumT {
-        self.quantile_est.reset();
+        self.bins.iter_mut().for_each(|x| *x = 0);
+
+        let mut binner = Binner::new(&mut self.bins, self.limits, |x, y| *x += y);
         for &i in examples {
-            self.quantile_est.feed(targets[i]);
-        }
-        let mut stage2 = self.quantile_est.stage2(0.5);
-        for &i in examples {
-            stage2.feed(targets[i]);
+            binner.insert(targets[i], 1);
         }
 
-        stage2.get_approx_quantile()
+        let rank = (examples.len() / 2) as u32;
+        let (bin, _rank_lo, _rank_hi) = binner.bin_with_rank::<u32, _>(rank, |&x| x);
+
+        // Interpolate between two representatives
+        //let value = {
+        //    let d = (rank_hi - rank_lo) as NumT;
+        //    let u = (rank - rank_lo) as NumT / d;
+        //    let r0 = binner.bin_representative(bin);
+        //    let r1 = binner.bin_representative(bin + 1);
+
+        //    (1.0 - u) * r0 + u * r1
+        //};
+        
+        // Take the bin representative
+        let value = binner.bin_representative(bin);
+        value
     }
 }
 
@@ -138,7 +154,7 @@ impl Objective for L1 {
 
 
 
-// ------------------------------------------------------------------------------------------------
+// - Huber loss -----------------------------------------------------------------------------------
 
 pub struct Huber {}
 
@@ -147,25 +163,50 @@ pub struct Huber {}
 
 
 
-// ------------------------------------------------------------------------------------------------
+// - Binary log loss ------------------------------------------------------------------------------
 
 pub struct Binary {
     gradients: Vec<NumT>,
-    bounds: (NumT, NumT),
+    bias: NumT,
+}
 
+impl Binary {
+    pub fn new() -> Binary {
+        Binary {
+            gradients: Vec::new(),
+            bias: 0.0,
+        }
+    }
 }
 
 impl Objective for Binary {
     fn name(&self) -> &'static str { "Binary" }
-    fn get_bias(&self) -> NumT { 0.0 }
-    fn get_bounds(&self) -> (NumT, NumT) { self.bounds }
+    fn get_bias(&self) -> NumT { self.bias }
+    fn get_bounds(&self) -> (NumT, NumT) { (-1.0, 1.0) }
     fn gradients(&self) -> &[NumT] { &self.gradients }
 
     fn initialize(&mut self, targets: &[NumT], predictions: &[NumT]) {
-        unimplemented!()
+        debug_assert!(targets.iter().all(|&t| t == 0.0 || t == 1.0));
+        assert_eq!(targets.len(), predictions.len());
+        let n = targets.len();
+        self.gradients.resize(n, 0.0);
+
+        for i in 0..n {
+            let (t, p) = (targets[i], predictions[i]);
+            let y = 2.0 * t - 1.0; // 0.0 -> -1.0; 1.0 -> 1.0
+            self.gradients[i] = -(2.0*y) / (1.0 + (2.0*y*p).exp());
+        }
     }
 
-    fn predict_leaf_value(&mut self, targets: &[NumT], examples: &[usize]) -> NumT {
-        unimplemented!()
+    fn predict_leaf_value(&mut self, _: &[NumT], examples: &[usize]) -> NumT {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for &i in examples {
+            let y = -self.gradients[i];
+            let yabs = y.abs();
+            num += y;
+            den += yabs * (2.0 - yabs);
+        }
+        0.5 * ((num / den) + 1.0)
     }
 }

@@ -3,7 +3,7 @@ use std::borrow::{Borrow, BorrowMut};
 use std::fmt::Debug;
 use std::mem::{size_of, align_of};
 use std::ptr;
-use std::ops::{Sub, Deref, DerefMut};
+use std::ops::{Add, Sub, Deref, DerefMut};
 use std::slice;
 use std::marker::PhantomData;
 
@@ -16,7 +16,7 @@ use crate::bitblock::{BitBlock, get_bit, set_bit, get_bitpos, get_blockpos};
 use crate::dataset::Dataset;
 use crate::simd;
 
-pub type SliceRange = (u32, u32);
+pub type SliceRange = (u32, u32); // TODO change to struct SliceRange(u32, u32), impl is_null_range()
 pub type BitVecRef<'a> = BitVec<&'a [BitBlock]>;
 pub type BitVecMut<'a> = BitVec<&'a mut [BitBlock]>;
 pub type BitSliceRef<'a, L> = BitSlice<&'a [BitBlock], L>;
@@ -78,6 +78,7 @@ where T: Clone {
     }
 
     unsafe fn alloc(capacity: usize, byte_align: usize) -> *mut T {
+        assert!(capacity > 0);
         let nbytes = capacity * size_of::<T>();
         let layout = alloc::Layout::from_size_align(nbytes, byte_align).unwrap();
         let ptr = alloc::alloc(layout) as *mut T;
@@ -103,6 +104,7 @@ where T: Clone {
 
     fn resize(&mut self, new_len: usize, value: T) {
         if new_len > self.capacity {
+            assert!(self.capacity > 0);
             let mut new_cap = self.capacity * 2;
             while new_cap < new_len { new_cap *= 2; }
             unsafe { self.realloc(new_cap) };
@@ -199,13 +201,14 @@ where T: Clone {
     }
 
     pub fn free_slice(&mut self, range: SliceRange) {
+        debug_assert!(self.free.iter().filter(|r| r.0 == range.0).next().is_none(), "double free");
         let full_range = (range.0, self.slice_ends[&range.0]);
         self.free.push(full_range)
     }
 
     pub fn reset(&mut self) {
         self.len = 0;
-        self.free = Vec::new();
+        self.free.clear();
         self.slice_ends = HashMap::default();
     }
 }
@@ -245,7 +248,7 @@ where T: Clone + Default {
     pub fn for_dataset(dataset: &Dataset) -> Self {
         // Use the right amount of 'buckets' for each feature
         // Currently only categorical features; one bucket for each cat. feat. value.
-        Self::new(dataset.features().iter().map(|f| f.get_nbuckets() as u32 ))
+        Self::new(dataset.features().iter().map(|f| f.get_nbins() as u32 ))
     }
 
     fn get_histogram_range(&self, feat_id: usize) -> (usize, usize) {
@@ -279,6 +282,14 @@ where T: Clone + Default {
             let parent = buffer[(plo+i) as usize].clone();
             let left   = buffer[(llo+i) as usize].clone();
             buffer[(rlo+i) as usize] = parent - left;
+        }
+    }
+
+    pub fn hist_cumsum(&mut self, range: SliceRange, feat_id: usize)
+    where T: Add<Output=T> {
+        let hist = self.get_hist_mut(range, feat_id);
+        for i in 1..hist.len() {
+            hist[i] = hist[i-1].clone() + hist[i].clone();
         }
     }
 
