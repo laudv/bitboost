@@ -16,9 +16,8 @@ pub fn main() {
     let mut config = Config::new();
     config.target_feature_id = -1;
     config.categorical_columns = (0..16).collect();
-    config.optimize_leaf_values = true;
     config.max_tree_depth = 6;
-    config.discr_nbits = 1;
+    config.discr_nbits = 4;
     config.compression_threshold = 0.50;
     //config.compression_threshold = 1.0;
     config.min_gain = 1e-6;
@@ -28,13 +27,18 @@ pub fn main() {
 
     let dataset = Dataset::from_csv_file(&config, filename).expect("data error");
     let targets = dataset.target().get_raw_data();
-    let predictions = vec![0.0; targets.len()];
 
     // Timings
-    let r = 10;
+    let r = 0;
     let mut context = TreeLearnerContext::new(&config, &dataset);
-    let mut obj = objective::L1::new(); obj.initialize(&targets, &predictions);
+
+    let mut obj = objective::Binary::new();
+    obj.initialize(&targets);
+    obj.update(&targets);
+
+    println!("Bias = {}", obj.bias());
     let mut objective: Box<dyn Objective> = Box::new(obj);
+
     let now = Instant::now();
     for _ in 0..r {
         let learner = TreeLearner::new(&mut context, objective.as_mut());
@@ -45,8 +49,11 @@ pub fn main() {
              elapsed.subsec_micros() as f32 * 1e-3) / r as f32);
 
     // Results
+    objective.initialize(targets);
+    objective.update(targets);
     let learner = TreeLearner::new(&mut context, objective.as_mut());
-    let tree = learner.train();
+    let mut tree = learner.train();
+    tree.set_bias(objective.bias());
 
     let pred = tree.predict(&dataset);
     let ms: [Box<dyn Metric>; 4] = [Box::new(metric::L2::new()),
@@ -59,10 +66,11 @@ pub fn main() {
         println!("eval: {:e} ({})", eval, m.name());
     }
 
-    //println!();
-    //for (i, (x, y)) in dataset.target().get_raw_data().iter().zip(pred).enumerate() {
-    //    println!("{:4}: {:15} {:15} {:15e}", i, x, y, (x-y).abs());
-    //}
+    println!();
+    println!("{:4}  {:>15} {:>15} {:>15}", "", "target", "pred", "diff");
+    for (i, (x, y)) in targets.iter().zip(pred).enumerate() {
+        println!("{:4}: {:15} {:15} {:15e}", i, x, y, (x-y).abs());
+    }
 
     println!("{:?}", tree);
 

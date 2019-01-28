@@ -226,14 +226,20 @@ impl Debug for Tree {
 // ------------------------------------------------------------------------------------------------
 
 pub struct AdditiveTree {
+    bias: NumT,
     trees: Vec<Tree>,
 }
 
 impl AdditiveTree {
     pub fn new() -> AdditiveTree {
         AdditiveTree {
+            bias: 0.0,
             trees: Vec::new(),
         }
+    }
+
+    pub fn set_bias(&mut self, bias: NumT) {
+        self.bias = bias;
     }
 
     pub fn push_tree(&mut self, tree: Tree) {
@@ -242,7 +248,7 @@ impl AdditiveTree {
 
     pub fn predict(&self, dataset: &Dataset) -> Vec<NumT> {
         let nexamples = dataset.nexamples();
-        let mut accum = vec![0.0; nexamples];
+        let mut accum = vec![self.bias; nexamples];
         for tree in &self.trees {
             tree.predict_and(dataset, &mut accum, |prediction, accum| {
                 *accum += prediction;

@@ -104,7 +104,7 @@ if __name__ == "__main__":
     card_range = [4, 5]
     compression = False
     test_frac = 0.0
-    ntrees = 1
+    ntrees = 2
 
     #for attr in [4, 8, 16, 32, 64, 128, 256]:
     compr_opt = "gzip" if compression else None

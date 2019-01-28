@@ -3,45 +3,65 @@ use std::env;
 use spdyboost::NumT;
 use spdyboost::config::Config;
 use spdyboost::dataset::Dataset;
-//use spdyboost::boost::Booster;
-//use spdyboost::tree::loss;
-//use spdyboost::tree::eval::Evaluator;
+use spdyboost::boost::Booster;
+use spdyboost::metric::Metric;
+use spdyboost::metric;
 
 pub fn main() {
     pretty_env_logger::init();
 
     let mut config = Config::new();
     config.target_feature_id = -1;
-    config.categorical_columns = (0..256).collect();
-    config.reg_lambda = 0.05;
+    config.categorical_columns = (0..116).collect();
+    config.reg_lambda = 0.0;
     config.max_tree_depth = 6;
-    config.discr_nbits = 4;
+    config.discr_nbits = 1;
     config.compression_threshold = 0.50;
 
-    config.learning_rate = 0.5;
-    config.niterations = 1;
-    config.optimize_leaf_values = false;
+    config.learning_rate = 0.1;
+    config.niterations = 200;
+    config.objective = String::from("L1");
 
     let args: Vec<String> = env::args().collect();
     let filename = args.get(1).expect("no data file given");
     let dataset = Dataset::from_csv_file(&config, filename).expect("data error");
+    let ms: [Box<dyn Metric>; 4] = [Box::new(metric::L2::new()),
+                                    Box::new(metric::Rmse::new()),
+                                    Box::new(metric::BinaryLoss::new()),
+                                    Box::new(metric::BinaryError::new())];
 
-    //let mut booster = Booster::new(&config, &dataset);
-    //booster.train();
+    let booster = Booster::new(&config, &dataset, &[]);
+    let model = booster.train();
 
-    //let model = booster.into_model();
+    let targets = dataset.target().get_raw_data();
+    let pred = model.predict(&dataset);
 
-    //if let Some(testfile) = args.get(2) {
-    //    println!("Loading test set");
-    //    let testset = Dataset::from_csv_file(&config, testfile).expect("test data error");
-    //    let targets = testset.target().get_raw_data();
-    //    let pred = model.predict(&testset);
+    for m in &ms {
+        let eval = m.eval(targets, &pred);
+        println!("train eval: {:e} ({})", eval, m.name());
+    }
 
-    //    evaluate(&loss::L2Loss::new(), targets, &pred);
-    //    //evaluate(&loss::LogLoss::new(), targets, &pred);
+    if dataset.nexamples() <= 200 {
+        println!();
+        println!("{:4}  {:>15} {:>15} {:>15}", "", "target", "pred", "diff");
+        for (i, (x, y)) in targets.iter().zip(pred).enumerate() {
+            println!("{:4}: {:15} {:15} {:15e}", i, x, y, (x-y).abs());
+        }
+    }
 
-    //    write_results(&pred).unwrap();
-    //}
+    if let Some(testfile) = args.get(2) {
+        println!("Loading test set");
+        let testset = Dataset::from_csv_file(&config, testfile).expect("test data error");
+        let targets = testset.target().get_raw_data();
+        let pred = model.predict(&testset);
+
+        for m in &ms {
+            let eval = m.eval(targets, &pred);
+            println!(" test eval: {:e} ({})", eval, m.name());
+        }
+
+        write_results(&pred).unwrap();
+    }
 }
 
 use std::fs::File;

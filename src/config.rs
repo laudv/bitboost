@@ -10,13 +10,16 @@ pub struct Config {
 
     pub categorical_columns: Vec<usize>,
 
+    pub objective: String,
+
     // Tree
     pub max_tree_depth: usize,
     pub reg_lambda: NumT,
     pub min_examples_leaf: u32,
     pub min_gain: NumT,
     pub nsplits_cands: usize,
-
+    pub huber_alpha: NumT,
+    
     pub discr_nbits: usize,
 
     /// A threshold for the ratio #zero-block / #blocks; if ratio > threshold, then apply
@@ -27,7 +30,6 @@ pub struct Config {
     // Boosting
     pub learning_rate: NumT,
     pub niterations: usize,
-    pub optimize_leaf_values: bool,
 }
 
 impl Config {
@@ -40,11 +42,14 @@ impl Config {
 
             categorical_columns: Vec::new(),
 
+            objective: String::from("L2"),
+
             max_tree_depth: 4,
             reg_lambda: 0.0,
             min_examples_leaf: 1,
             min_gain: 0.0,
             nsplits_cands: 16,
+            huber_alpha: 0.9,
 
             discr_nbits: 4,
 
@@ -52,7 +57,6 @@ impl Config {
 
             learning_rate: 0.1,
             niterations: 100,
-            optimize_leaf_values: true,
         }
     }
 }

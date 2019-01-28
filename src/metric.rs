@@ -60,8 +60,10 @@ impl Rmse {
 
 pub struct BinaryLoss {}
 impl_metric!(BinaryLoss, eval_one: |_, t: NumT, p: NumT| {
-    if t <= 0.0 { if (1.0 - p) > EPSILON { -(1.0 - p).ln() } else { -EPSILON.ln() } }
-    else        { if        p  > EPSILON { -(      p).ln() } else { -EPSILON.ln() } }
+    let (t, p) = (2.0 * t - 1.0, 2.0 * p - 1.0);
+    (1.0 + (-2.0 * t * p).exp()).ln()
+    //if t <= 0.0 { if (1.0 - p) > EPSILON { -(1.0 - p).ln() } else { -EPSILON.ln() } }
+    //else        { if        p  > EPSILON { -(      p).ln() } else { -EPSILON.ln() } }
 });
 
 impl BinaryLoss {

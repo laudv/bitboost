@@ -459,32 +459,25 @@ where 'a: 'b {
 
     /// Use only the discretized gradient values to find leaf value, rather than letting the
     /// objective function provide a slower/more accurate leaf value. Only makes sense for L2.
-    fn get_best_leaf_value(&self, grad_sum: NumT, example_count: u32) -> NumT {
-        let lambda = self.ctx.config.reg_lambda;
-        -grad_sum / (example_count as NumT + lambda) // should be neg
-    }
+    //fn get_best_leaf_value(&self, grad_sum: NumT, example_count: u32) -> NumT {
+    //    let lambda = self.ctx.config.reg_lambda;
+    //    -grad_sum / (example_count as NumT + lambda) // should be neg
+    //}
 
     fn predict_leaf_value(&mut self, n2s: &Node2Split) {
-        let value;
+        let targets = self.ctx.dataset.target().get_raw_data();
+        let mask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
+        let examples = &mut self.ctx.example_buffer;
+        examples.clear();
 
-        if self.ctx.config.optimize_leaf_values {
-            let targets = self.ctx.dataset.target().get_raw_data();
-            let mask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
-            let examples = &mut self.ctx.example_buffer;
-            examples.clear();
-
-            if n2s.compressed {
-                let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
-                examples.extend(mask.index_iter_compr(&idxs));
-            } else {
-                examples.extend(mask.index_iter());
-            }
-
-            value = self.objective.predict_leaf_value(targets, examples);
+        if n2s.compressed {
+            let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
+            examples.extend(mask.index_iter_compr(&idxs));
         } else {
-            value = self.get_best_leaf_value(n2s.grad_sum, n2s.example_count);
+            examples.extend(mask.index_iter());
         }
 
+        let value = self.objective.predict_leaf_value(targets, examples);
         self.tree.set_value(n2s.node_id, value);
 
         debug!("N{:03} leaf value {} (no more splits)", n2s.node_id, value);
@@ -495,37 +488,28 @@ where 'a: 'b {
         let left_value;
         let right_value;
 
-        if self.ctx.config.optimize_leaf_values {
-            let targets = self.ctx.dataset.target().get_raw_data();
-            let pmask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
-            let fmask = get_fval_mask!(self, feature, split);
-            let examples = &mut self.ctx.example_buffer;
+        let targets = self.ctx.dataset.target().get_raw_data();
+        let pmask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
+        let fmask = get_fval_mask!(self, feature, split);
+        let examples = &mut self.ctx.example_buffer;
 
-            examples.clear();
-            if n2s.compressed {
-                let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
-                examples.extend(pmask.index_iter_and_compr(&fmask, &idxs));
-            } else {
-                examples.extend(pmask.index_iter_and(&fmask));
-            }
-            left_value = self.objective.predict_leaf_value(targets, examples);
-
-            examples.clear();
-            if n2s.compressed {
-                let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
-                examples.extend(pmask.index_iter_andnot_compr(&fmask, &idxs));
-            } else {
-                examples.extend(pmask.index_iter_andnot(&fmask));
-            }
-            right_value = self.objective.predict_leaf_value(targets, examples);
+        examples.clear();
+        if n2s.compressed {
+            let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
+            examples.extend(pmask.index_iter_and_compr(&fmask, &idxs));
         } else {
-            let hist = self.ctx.hist_store.get_hist(n2s.hists_range, feature.id());
-            let (pgrad, pcount) = (n2s.grad_sum, n2s.example_count);
-            let (lgrad, lcount) = hist[split.fval_id].unpack();
-            let (rgrad, rcount) = (pgrad - lgrad, pcount - lcount);
-            left_value = self.get_best_leaf_value(lgrad, lcount);
-            right_value = self.get_best_leaf_value(rgrad, rcount);
+            examples.extend(pmask.index_iter_and(&fmask));
         }
+        left_value = self.objective.predict_leaf_value(targets, examples);
+
+        examples.clear();
+        if n2s.compressed {
+            let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
+            examples.extend(pmask.index_iter_andnot_compr(&fmask, &idxs));
+        } else {
+            examples.extend(pmask.index_iter_andnot(&fmask));
+        }
+        right_value = self.objective.predict_leaf_value(targets, examples);
 
         let left_id = self.tree.left_child(n2s.node_id);
         let right_id = self.tree.right_child(n2s.node_id);
@@ -606,7 +590,7 @@ where 'a: 'b {
 macro_rules! get_root_n2s {
     ($f:ident, $bsl:ident, $hist_fun:ident) => {
         fn $f(this: &mut TreeLearner) -> Node2Split {
-            let bounds = this.objective.get_bounds();
+            let bounds = this.objective.bounds();
             let nexamples  = this.ctx.dataset.nexamples();
             let grad_range = this.ctx.grad_store.alloc_zero_bitslice::<$bsl>(nexamples);
             let mask_range = this.ctx.mask_store.alloc_one_bits(nexamples);
@@ -650,7 +634,6 @@ macro_rules! compress_examples {
         fn $f(this: &mut TreeLearner, parent_n2s: &Node2Split, child_n2s: &mut Node2Split,
               n_u32_child: usize)
         {
-            info!("applying compression to N{:03}->N{:03}", parent_n2s.node_id, child_n2s.node_id);
             child_n2s.compressed = true;
 
             // Allocate space for indices, gradients for child (reuse masks from `split_examples`)
@@ -740,7 +723,7 @@ macro_rules! build_histograms {
 macro_rules! get_grad_sum {
     ($f:ident, $bsl:ident, naive) => {
         fn $f(this: &TreeLearner, n2s: &Node2Split, fval_mask: &BitVecRef) -> (NumT, u32) {
-            let bounds     = this.objective.get_bounds();
+            let bounds     = this.objective.bounds();
             let ems_bitset = this.ctx.mask_store.get_bitvec(n2s.mask_range);
             let idx_bitset = this.ctx.idx_store.get_bitvec(n2s.idx_range);
 
@@ -777,7 +760,7 @@ macro_rules! get_grad_sum {
     ($f:ident, $bsl:ident, simd) => {
         fn $f(this: &TreeLearner, n2s: &Node2Split, fval_mask: &BitVecRef) -> (NumT, u32) {
             fn sum_uc(this: &TreeLearner, n2s: &Node2Split, fval_mask: &BitVecRef) -> (NumT, u32) {
-                let bounds = this.objective.get_bounds();
+                let bounds = this.objective.bounds();
                 let ems = this.ctx.mask_store.get_bitvec(n2s.mask_range);
                 let grads = this.ctx.grad_store.get_bitslice::<$bsl>(n2s.grad_range);
 
@@ -789,7 +772,7 @@ macro_rules! get_grad_sum {
             }
 
             fn sum_c(this: &TreeLearner, n2s: &Node2Split, fval_mask: &BitVecRef) -> (NumT, u32) {
-                let bounds = this.objective.get_bounds();
+                let bounds = this.objective.bounds();
                 let ems = this.ctx.mask_store.get_bitvec(n2s.mask_range);
                 let grads = this.ctx.grad_store.get_bitslice::<$bsl>(n2s.grad_range);
                 let indices = this.ctx.idx_store.get_bitvec(n2s.idx_range);

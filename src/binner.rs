@@ -20,6 +20,7 @@ pub struct Binner<'a, T, Comb>
 where T: Clone,
       Comb: Fn(&mut T, T),
 {
+    count: u32,
     bins: &'a mut [T],
     combiner: Comb,
     min_value: NumT,
@@ -39,6 +40,7 @@ where T: Clone,
         let delta = get_linpol_delta((min_value, max_value), bins.len());
 
         Binner {
+            count: 0,
             bins,
             combiner,
             min_value,
@@ -46,9 +48,8 @@ where T: Clone,
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.bins.len()
-    }
+    pub fn len(&self) -> usize { self.bins.len() }
+    pub fn count(&self) -> u32 { self.count }
 
     fn get_bin(&self, value: NumT) -> usize {
         let x = (value - self.min_value) / self.delta;
@@ -59,6 +60,7 @@ where T: Clone,
     pub fn insert(&mut self, value: NumT, data: T) {
         let bin = self.get_bin(value);
         (self.combiner)(&mut self.bins[bin], data);
+        self.count += 1;
     }
 
     pub fn bin_representative(&self, bin: usize) -> NumT {

@@ -21,4 +21,4 @@ pub mod objective;
 pub mod binner;
 pub mod numfeat_mask_store;
 pub mod metric;
-//pub mod boost;
+pub mod boost;
