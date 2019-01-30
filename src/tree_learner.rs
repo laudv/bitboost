@@ -8,7 +8,8 @@ use crate::config::Config;
 use crate::dataset::{Dataset, FeatureType, NumFeatureInfo};
 use crate::tree::{Tree, SplitCrit};
 use crate::slice_store::{SliceRange, HistStore, BitBlockStore, BitVecRef};
-use crate::slice_store::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2, BitSliceLayout4};
+use crate::slice_store::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2};
+use crate::slice_store::{BitSliceLayout4, BitSliceLayout8};
 use crate::objective::Objective;
 use crate::numfeat_mask_store::NumFeatMaskStore;
 use crate::binner::Binner;
@@ -170,15 +171,16 @@ impl <'a> TreeLearnerContext<'a> {
 /// This is probably not the fastest way to do dynamic dispatch, but the amount of work done by
 /// each of the specialized functions overshadows the cost of the function selection.
 macro_rules! dispatch {
-    ($self:expr, $fun_w1:ident, $fun_w2:ident, $fun_w4:ident) => {
-        dispatch!($self, $fun_w1, $fun_w2, $fun_w4; )
+    ($self:expr, $fun_w1:ident, $fun_w2:ident, $fun_w4:ident, $fun_w8:ident) => {
+        dispatch!($self, $fun_w1, $fun_w2, $fun_w4, $fun_w8; )
     };
-    ($self:expr, $fun_w1:ident, $fun_w2:ident, $fun_w4:ident; $( $args:expr ),*) => {{
+    ($self:expr, $fun_w1:ident, $fun_w2:ident, $fun_w4:ident, $fun_w8:ident; $( $args:expr ),*) => {{
         let discr_nbits = $self.ctx.config.discr_nbits;
         match discr_nbits {
             1 => $fun_w1($self, $( $args, )*),
             2 => $fun_w2($self, $( $args, )*),
             4 => $fun_w4($self, $( $args, )*),
+            8 => $fun_w8($self, $( $args, )*),
             _ => panic!("invalid discr_width"),
         }
     }}
@@ -327,7 +329,7 @@ where 'a: 'b {
     }
 
     fn get_root_n2s(&mut self) -> Node2Split {
-        dispatch!(self, get_root_n2s_w1, get_root_n2s_w2, get_root_n2s_w4)
+        dispatch!(self, get_root_n2s_w1, get_root_n2s_w2, get_root_n2s_w4, get_root_n2s_w8)
     }
 
     fn get_left_right_n2s(&mut self, parent_n2s: &Node2Split, split: &Split)
@@ -401,12 +403,13 @@ where 'a: 'b {
 
     fn compress_examples(&mut self, parent_n2s: &Node2Split, child_n2s: &mut Node2Split,
                          n_u32_child: usize) {
-        dispatch!(self, compr_examples_w1, compr_examples_w2, compr_examples_w4;
+        dispatch!(self, compr_examples_w1, compr_examples_w2, compr_examples_w4, compr_examples_w8;
                   parent_n2s, child_n2s, n_u32_child)
     }
     
     fn build_histograms(&mut self, n2s: &Node2Split) {
-        dispatch!(self, build_histograms_w1, build_histograms_w2, build_histograms_w4; n2s)
+        dispatch!(self, build_histograms_w1, build_histograms_w2, build_histograms_w4,
+                  build_histograms_w8; n2s)
     }
 
     fn derive_histograms(&mut self, parent_n2s: &Node2Split, left_n2s: &Node2Split,
@@ -524,6 +527,7 @@ where 'a: 'b {
             1 => self.debug_print_bsl::<BitSliceLayout1>(n2s, split),
             2 => self.debug_print_bsl::<BitSliceLayout2>(n2s, split),
             4 => self.debug_print_bsl::<BitSliceLayout4>(n2s, split),
+            8 => self.debug_print_bsl::<BitSliceLayout8>(n2s, split),
             _ => panic!(),
         }
     }
@@ -627,6 +631,7 @@ macro_rules! get_root_n2s {
 get_root_n2s!(get_root_n2s_w1, BitSliceLayout1, build_histograms_w1);
 get_root_n2s!(get_root_n2s_w2, BitSliceLayout2, build_histograms_w2);
 get_root_n2s!(get_root_n2s_w4, BitSliceLayout4, build_histograms_w4);
+get_root_n2s!(get_root_n2s_w8, BitSliceLayout8, build_histograms_w8);
 
 macro_rules! compress_examples {
     ($f:ident, $bsl:ident) => {
@@ -685,6 +690,7 @@ macro_rules! compress_examples {
 compress_examples!(compr_examples_w1, BitSliceLayout1);
 compress_examples!(compr_examples_w2, BitSliceLayout2);
 compress_examples!(compr_examples_w4, BitSliceLayout4);
+compress_examples!(compr_examples_w8, BitSliceLayout8);
 
 macro_rules! build_histograms {
     ($f:ident, $bsl:ident, $sum_method:ident) => {
@@ -795,3 +801,4 @@ macro_rules! get_grad_sum {
 build_histograms!(build_histograms_w1, BitSliceLayout1, simd);
 build_histograms!(build_histograms_w2, BitSliceLayout2, simd);
 build_histograms!(build_histograms_w4, BitSliceLayout4, simd);
+build_histograms!(build_histograms_w8, BitSliceLayout8, simd);

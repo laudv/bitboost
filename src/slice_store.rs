@@ -900,8 +900,8 @@ where B: Borrow<[BitBlock]>,
           I: Integer,
           BO: Borrow<[BitBlock]>,
     {
-        assert!(from < other.vec.block_len::<u32>() / L::width());
-        assert!(to < self.vec.block_len::<u32>() / L::width());
+        debug_assert!(from < other.vec.block_len::<u32>() / L::width());
+        debug_assert!(to < self.vec.block_len::<u32>() / L::width());
 
         let (from_sb, from_i) = Self::get_indices(from);
         let (to_sb, to_i) = Self::get_indices(to);
@@ -958,11 +958,15 @@ where B: Borrow<[BitBlock]>,
     }
 
     pub unsafe fn sum_all_masked2_unsafe(&self, nm: &BitVecRef, fm: &BitVecRef) -> u64 {
-        let fs: [unsafe fn(&[BitBlock], &[BitBlock], &[BitBlock]) -> u64; 4] = [
+        let fs: [unsafe fn(&[BitBlock], &[BitBlock], &[BitBlock]) -> u64; 8] = [
             simd::btslce_summ1_uc,
             simd::btslce_summ2_uc,
             simd::btslce_summ1_uc, // invalid
-            simd::btslce_summ4_uc];
+            simd::btslce_summ4_uc, // invalid
+            simd::btslce_summ1_uc, // invalid
+            simd::btslce_summ1_uc, // invalid
+            simd::btslce_summ1_uc, // invalid
+            simd::btslce_summ8_uc];
 
         let f = fs[L::width() - 1];
         f(self, nm, fm)
@@ -977,11 +981,15 @@ where B: Borrow<[BitBlock]>,
     pub unsafe fn sum_all_masked2_compr_unsafe(&self, idxs: &BitVecRef, nm: &BitVecRef,
                                                fm: &BitVecRef) -> u64
     {
-        let fs: [unsafe fn(&[BitBlock], &[BitBlock], &[BitBlock], &[BitBlock]) -> u64; 4] = [
+        let fs: [unsafe fn(&[BitBlock], &[BitBlock], &[BitBlock], &[BitBlock]) -> u64; 8] = [
             simd::btslce_summ1_c,
             simd::btslce_summ2_c,
             simd::btslce_summ1_c, // invalid
-            simd::btslce_summ4_c];
+            simd::btslce_summ4_c,
+            simd::btslce_summ1_c, // invalid
+            simd::btslce_summ1_c, // invalid
+            simd::btslce_summ1_c, // invalid
+            simd::btslce_summ8_c];
 
         let f = fs[L::width() - 1];
         f(self, idxs, nm, fm)
@@ -1023,6 +1031,7 @@ macro_rules! bitslice_layout {
 bitslice_layout!(BitSliceLayout1, 1);
 bitslice_layout!(BitSliceLayout2, 2);
 bitslice_layout!(BitSliceLayout4, 4);
+bitslice_layout!(BitSliceLayout8, 8);
 
 
 
@@ -1037,7 +1046,7 @@ mod test {
     use crate::bitblock::BitBlock;
     use crate::slice_store::{SliceStore, HistStore, BitBlockStore};
     use crate::slice_store::{BitSliceLayout};
-    use crate::slice_store::{BitSliceLayout1, BitSliceLayout2, BitSliceLayout4};
+    use crate::slice_store::{BitSliceLayout1, BitSliceLayout2, BitSliceLayout4, BitSliceLayout8};
 
     const BOUNDS: (NumT, NumT) = (0.0, 1.0);
 
@@ -1366,14 +1375,10 @@ mod test {
 
         let mut sum_check = 0u64;
         let mut store = BitBlockStore::new(16);
-        println!("slice_r");
         let slice_r = store.alloc_zero_bitslice::<L>(n);
-        println!("mask_r1");
         let mask_r1 = store.alloc_zero_bits(n);
         let n_u32 = store.get_bitvec(mask_r1).block_len::<u32>();
-        println!("mask_r2");
         let mask_r2 = store.alloc_zero_bits(4*n);
-        println!("idxs_r");
         let idxs_r = store.alloc_from_iter(n_u32, (0..n_u32).map(|i| (2*i) as u32));
 
         let mut slice = store.get_bitslice_mut::<L>(slice_r);
@@ -1421,6 +1426,11 @@ mod test {
         bitslice_sum_block::<BitSliceLayout4>();
         bitslice_sum_all::<BitSliceLayout4>();
         bitslice_sum_all_compr::<BitSliceLayout4>();
+
+        bitslice_get_set_value::<BitSliceLayout8>();
+        bitslice_sum_block::<BitSliceLayout8>();
+        bitslice_sum_all::<BitSliceLayout8>();
+        bitslice_sum_all_compr::<BitSliceLayout8>();
     }
 
     #[test]

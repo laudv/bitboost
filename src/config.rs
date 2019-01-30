@@ -53,7 +53,7 @@ impl Config {
 
             discr_nbits: 4,
 
-            compression_threshold: 0.75,
+            compression_threshold: 0.5,
 
             learning_rate: 0.1,
             niterations: 100,

@@ -189,7 +189,6 @@ unsafe fn debug_print32x4(reg: __m128i) {
 
 
 
-//#[inline(never)]
 unsafe fn load_and(d: (*const __m256i, *const __m256i), i: usize) -> __m256i {
     let block = _mm256_load_si256(d.0.add(i));
     let mask  = _mm256_load_si256(d.1.add(i));
@@ -230,6 +229,16 @@ unsafe fn load_mask_and_u32_w4_uc(d: (*const __m256i, *const i64, *const i64), i
     _mm256_and_si256(block, mask)
 }
 
+unsafe fn load_mask_and_u32_w8_uc(d: (*const __m256i, *const u32, *const u32), i: usize)
+    -> __m256i
+{
+    let block = _mm256_load_si256(d.0.add(i));
+    let mask32 = *d.1.add(i) & *d.2.add(i);
+    let mask64 = (((mask32 as u64) << 32) | mask32 as u64) as i64;
+    let mask = _mm256_set1_epi64x(mask64);
+    _mm256_and_si256(block, mask)
+}
+
 unsafe fn load_mask_and_u32_w1_c(d: (*const __m256i, *const __m256i, *const __m256i, *const i32),
                                  i: usize) -> __m256i
 {
@@ -265,6 +274,19 @@ unsafe fn load_mask_and_u32_w4_c(d: (*const __m256i, *const u32, *const i64, *co
     _mm256_and_si256(block, mask)
 }
 
+unsafe fn load_mask_and_u32_w8_c(d: (*const __m256i, *const u32, *const u32, *const u32), i: usize)
+    -> __m256i
+{
+    let block = _mm256_load_si256(d.0.add(i));
+    let index = *d.1.add(i) as usize;
+    let mask1 = *d.2.add(i);
+    let mask2 = *d.3.add(index);
+    let mask32 = mask1 & mask2;
+    let mask64 = (((mask32 as u64) << 32) | mask32 as u64) as i64;
+    let mask = _mm256_set1_epi64x(mask64);
+    _mm256_and_si256(block, mask)
+}
+
 unsafe fn reduce_64(total: __m256i, w0: u64, w1: u64, w2: u64, w3: u64) -> u64 {
       w0 * _mm256_extract_epi64(total, 0) as u64
     + w1 * _mm256_extract_epi64(total, 1) as u64
@@ -272,23 +294,24 @@ unsafe fn reduce_64(total: __m256i, w0: u64, w1: u64, w2: u64, w3: u64) -> u64 {
     + w3 * _mm256_extract_epi64(total, 3) as u64
 }
 
-//unsafe fn reduce_32(total: __m256i, w0: u64, w1: u64, w2: u64, w3: u64,
-//                    w4: u64, w5: u64, w6: u64, w7: u64) -> u64 {
-//    let mut sum = 0;
-//    let x0 = _mm256_extract_epi64(total, 0) as u64;
-//    let (y0, y1) = (x0 & 0xFFFFFFFF, x0 >> 32); sum += w0*y0 + w1*y1;
-//    let x1 = _mm256_extract_epi64(total, 1) as u64;
-//    let (y2, y3) = (x1 & 0xFFFFFFFF, x1 >> 32); sum += w2*y2 + w3*y3;
-//    let x2 = _mm256_extract_epi64(total, 2) as u64;
-//    let (y4, y5) = (x2 & 0xFFFFFFFF, x2 >> 32); sum += w4*y4 + w5*y5;
-//    let x3 = _mm256_extract_epi64(total, 3) as u64;
-//    let (y6, y7) = (x3 & 0xFFFFFFFF, x3 >> 32); sum += w6*y6 + w7*y7;
-//    sum
-//}
+unsafe fn reduce_32(total: __m256i, w0: u64, w1: u64, w2: u64, w3: u64,
+                    w4: u64, w5: u64, w6: u64, w7: u64) -> u64 {
+    let mut sum = 0;
+    let x0 = _mm256_extract_epi64(total, 0) as u64;
+    let (y0, y1) = (x0 & 0xFFFFFFFF, x0 >> 32); sum += w0*y0 + w1*y1;
+    let x1 = _mm256_extract_epi64(total, 1) as u64;
+    let (y2, y3) = (x1 & 0xFFFFFFFF, x1 >> 32); sum += w2*y2 + w3*y3;
+    let x2 = _mm256_extract_epi64(total, 2) as u64;
+    let (y4, y5) = (x2 & 0xFFFFFFFF, x2 >> 32); sum += w4*y4 + w5*y5;
+    let x3 = _mm256_extract_epi64(total, 3) as u64;
+    let (y6, y7) = (x3 & 0xFFFFFFFF, x3 >> 32); sum += w6*y6 + w7*y7;
+    sum
+}
 
 unsafe fn reduce64_1(total: __m256i) -> u64 { reduce_64(total, 1, 1, 1, 1) }
 unsafe fn reduce64_2(total: __m256i) -> u64 { reduce_64(total, 1, 1, 2, 2) }
 unsafe fn reduce64_4(total: __m256i) -> u64 { reduce_64(total, 1, 2, 4, 8) }
+unsafe fn reduce32_8(total: __m256i) -> u64 { reduce_32(total, 1, 2, 4, 8, 16, 32, 64, 128) }
 
 
 
@@ -300,6 +323,8 @@ unsafe fn reduce64_4(total: __m256i) -> u64 { reduce_64(total, 1, 2, 4, 8) }
 // summx -> sum masked, width=x
 // uc   -> uncompressed
 // c    -> compressed
+// nm   -> node mask (node examples mask)
+// fm   -> feature mask (if compressed, uses the 'compressed' indices)
 
 pub unsafe fn bitvec_count_and_uc(v1: &[BitBlock], v2: &[BitBlock]) -> u64 {
     let nblocks = usize::min(v1.len(), v2.len());
@@ -352,6 +377,18 @@ pub unsafe fn btslce_summ4_uc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBloc
     harvey_seal_64!((ptr1, ptr2, ptr3), nblocks, load_mask_and_u32_w4_uc, reduce64_4)
 }
 
+pub unsafe fn btslce_summ8_uc(slice: &[BitBlock], nm: &[BitBlock], fm: &[BitBlock]) -> u64 {
+    let nblocks = slice.len();
+    debug_assert_eq!(nm.len() * 8, nblocks);
+    debug_assert_eq!(fm.len() * 8, nblocks);
+
+    let ptr1 = slice.as_ptr() as *const __m256i;
+    let ptr2 = nm.as_ptr() as *const u32;
+    let ptr3 = fm.as_ptr() as *const u32;
+
+    harvey_seal_32!((ptr1, ptr2, ptr3), nblocks, load_mask_and_u32_w8_uc, reduce32_8)
+}
+
 pub unsafe fn btslce_summ1_c(slice: &[BitBlock], indices: &[BitBlock], nm: &[BitBlock],
                              fm: &[BitBlock]) -> u64
 {
@@ -395,4 +432,19 @@ pub unsafe fn btslce_summ4_c(slice: &[BitBlock], indices: &[BitBlock], nm: &[Bit
     let ptr4 = fm.as_ptr() as *const u32;
 
     harvey_seal_64!((ptr1, ptr2, ptr3, ptr4), nblocks, load_mask_and_u32_w4_c, reduce64_4)
+}
+
+pub unsafe fn btslce_summ8_c(slice: &[BitBlock], indices: &[BitBlock], nm: &[BitBlock],
+                             fm: &[BitBlock]) -> u64
+{
+    let nblocks = slice.len();
+    debug_assert_eq!(indices.len() * 8, nblocks);
+    debug_assert_eq!(nm.len() * 8, nblocks);
+
+    let ptr1 = slice.as_ptr() as *const __m256i;
+    let ptr2 = indices.as_ptr() as *const u32;
+    let ptr3 = nm.as_ptr() as *const u32;
+    let ptr4 = fm.as_ptr() as *const u32;
+
+    harvey_seal_32!((ptr1, ptr2, ptr3, ptr4), nblocks, load_mask_and_u32_w8_c, reduce32_8)
 }
