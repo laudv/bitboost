@@ -293,13 +293,12 @@ where 'a: 'b {
                 let rloss = self.get_loss(rgrad, rcount);
                 let gain = ploss - lloss - rloss;
 
-                //let better = if gain > best_gain { "better" } else { "" };
-                //debug!("N{:03}-F{:02} possible split gain={} {}",
-                //       n2s.node_id, feat_id, gain, better);
-
                 if gain > best_gain {
                     use FeatureType::*;
                     let feat = self.ctx.dataset.get_feature(feat_id);
+
+                    //println!("N{:03}-F{:02} possible split gain={}",
+                    //       n2s.node_id, feat_id, gain);
 
                     match feat.get_feature_type() {
                         Uninitialized => panic!("uninitialized feature"),
@@ -563,13 +562,13 @@ where 'a: 'b {
 
         println!(" SPLIT N{:03} -> N{:03}, N{:03}:", nid, self.tree.left_child(nid),
                  self.tree.right_child(nid));
-        println!("   {:>4}  {:>15} {:>15} {:>15} {:>15}", "ex", "grad", "grad.discr", "colval",
-                 "target");
+        println!("   {:>4}  {:>15} {:>15} {:>15} {:>15} {:>15}", "ex", "grad", "grad.discr", "colval",
+                 "target", "cur.pred");
 
         let pr = |i: usize, lr: &str| {
-            println!(" - {:4}: {:15} {:15} {:15} {:15} {:>5}", i, self.objective.gradients()[i],
+            println!(" - {:4}: {:15} {:15} {:15} {:15} {:>15} {:>5}", i, self.objective.gradients()[i],
             self.ctx.grad_discr[i], feature.get_raw_data()[i],
-            self.ctx.dataset.target().get_raw_data()[i], lr);
+            self.ctx.dataset.target().get_raw_data()[i], self.objective.predictions()[i], lr);
         };
 
         for i in pmask.index_iter_and_compr(&fval_mask, &pidxs) { pr(i, "L") } println!();

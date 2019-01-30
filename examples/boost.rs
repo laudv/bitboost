@@ -12,15 +12,17 @@ pub fn main() {
 
     let mut config = Config::new();
     config.target_feature_id = -1;
-    config.categorical_columns = (0..116).collect();
+    config.categorical_columns = (0..784).collect();
+    config.min_examples_leaf = 1;
     config.reg_lambda = 0.0;
     config.max_tree_depth = 6;
     config.discr_nbits = 1;
     config.compression_threshold = 0.50;
+    config.min_gain = 1e-4;
 
     config.learning_rate = 0.1;
     config.niterations = 200;
-    config.objective = String::from("L1");
+    config.objective = String::from("binary");
 
     let args: Vec<String> = env::args().collect();
     let filename = args.get(1).expect("no data file given");
@@ -30,6 +32,7 @@ pub fn main() {
                                     Box::new(metric::BinaryLoss::new()),
                                     Box::new(metric::BinaryError::new())];
 
+    //let booster = Booster::new(&config, &dataset, &ms);
     let booster = Booster::new(&config, &dataset, &[]);
     let model = booster.train();
 
@@ -41,13 +44,13 @@ pub fn main() {
         println!("train eval: {:e} ({})", eval, m.name());
     }
 
-    if dataset.nexamples() <= 200 {
+    //if dataset.nexamples() <= 200 {
         println!();
         println!("{:4}  {:>15} {:>15} {:>15}", "", "target", "pred", "diff");
-        for (i, (x, y)) in targets.iter().zip(pred).enumerate() {
+        for (i, (x, y)) in targets.iter().zip(pred).enumerate().take(100) {
             println!("{:4}: {:15} {:15} {:15e}", i, x, y, (x-y).abs());
         }
-    }
+    //}
 
     if let Some(testfile) = args.get(2) {
         println!("Loading test set");

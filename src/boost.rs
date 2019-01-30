@@ -61,13 +61,13 @@ impl <'a> Booster<'a> {
         self.iter_count += 1;
         self.objective.update(targets);
 
-        let mut tree = {
+        let tree = {
             let learner = TreeLearner::new(ctx, self.objective.as_mut());
             let start = Instant::now();
             let tree = learner.train();
             let el = start.elapsed();
             let seconds = el.as_secs() as f32 * 1e3 + el.subsec_micros() as f32 * 1e-3;
-            info!("I{:03} tree time: {} ms", self.iter_count, seconds);
+            info!("I{:03} tree time: {:.2} ms, #leaf={}", self.iter_count, seconds, tree.nleafs());
 
             tree
         };
@@ -76,12 +76,14 @@ impl <'a> Booster<'a> {
             let pred = tree.predict(self.dataset);
             let mag = pred.iter()
                 .map(|&x| x * x)
-                .fold(0.0, |x, y| x+y) / pred.len() as NumT;
+                .fold(0.0, |x, y| x+y)
+                .sqrt() / pred.len() as NumT;
             info!("I{:03} tree value magnitude: {:e}", self.iter_count, mag);
         }
 
         // shrinkage is automatically applied by objective!
         self.ensemble.push_tree(tree);
+
 
         if !self.metrics.is_empty() {
             for m in self.metrics {

@@ -198,8 +198,6 @@ impl Objective for L1 {
             min = t.min(min);
             max = t.max(max);
         }
-        dbg!(min);
-        dbg!(max);
         let n = targets.len();
         let bias = median!(of targets: self, (min, max), targets, 0..n);
         self.initialize_base(config, n, bias);
@@ -349,22 +347,20 @@ impl Objective for Huber {
 objective_struct!(Binary { });
 
 impl Objective for Binary {
-    impl_simple_obj_methods!(Binary, |_: &Binary| (-1.0, 1.0));
+    impl_simple_obj_methods!(Binary, |_: &Binary| (-1.25, 1.25));
 
     fn initialize(&mut self, config: &Config, targets: &[NumT]) {
         debug_assert!(targets.iter().all(|&t| t == 0.0 || t == 1.0));
         let n = targets.len();
 
-        // TODO BIAS
         let nneg = targets.iter().filter(|&x| *x < 0.5).count() as NumT;
         let npos = n as NumT - nneg;
-        //let avg  = -1.0 * nneg + 1.0 * npos;
-        //let bias = 0.5 * ((1.0 + avg) / (1.0 - avg)).ln();
-        let bias = 0.0;
+        let avg  = (-1.0 * nneg + 1.0 * npos) / n as NumT;
+        let prior = 0.5 * ((1.0 + avg) / (1.0 - avg)).ln();
 
-        self.initialize_base(config, n, bias);
+        self.initialize_base(config, n, prior);
 
-        info!("Binary objective: posivite: {}, negative: {}", npos, nneg);
+        info!("Binary objective: posivite: {}, negative: {}, prior: {}", npos, nneg, prior);
     }
 
     fn update(&mut self, targets: &[NumT]) {
@@ -388,7 +384,7 @@ impl Objective for Binary {
             num += y;
             den += yabs * (2.0 - yabs);
         }
-        let value = 0.5 * ((num / den) + 1.0);
+        let value = num / den;
         self.update_predictions(examples, value)
     }
 }

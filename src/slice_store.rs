@@ -1010,7 +1010,7 @@ where B: Borrow<[BitBlock]> + BorrowMut<[BitBlock]>,
 }
 
 
-macro_rules! bitslice_info {
+macro_rules! bitslice_layout {
     ($name:ident, $width:expr) => {
         pub struct $name;
         impl BitSliceLayout for $name {
@@ -1020,9 +1020,9 @@ macro_rules! bitslice_info {
     }
 }
 
-bitslice_info!(BitSliceLayout1, 1);
-bitslice_info!(BitSliceLayout2, 2);
-bitslice_info!(BitSliceLayout4, 4);
+bitslice_layout!(BitSliceLayout1, 1);
+bitslice_layout!(BitSliceLayout2, 2);
+bitslice_layout!(BitSliceLayout4, 4);
 
 
 
