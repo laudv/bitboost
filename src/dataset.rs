@@ -142,7 +142,7 @@ impl Feature {
         self.feat_type = FeatureType::NomCat(bitvecs);
     }
 
-    fn gen_num_splitters(&mut self, max_nbins: usize) {
+    fn gen_num_feat_info(&mut self, max_nbins: usize) {
         let min_value = self.raw_data.iter().fold( 1.0 / 0.0, |x: NumT, &y| x.min(y));
         let max_value = self.raw_data.iter().fold(-1.0 / 0.0, |x: NumT, &y| x.max(y));
 
@@ -151,6 +151,8 @@ impl Feature {
             nbins: max_nbins,
             limits: (min_value, max_value),
         };
+
+        info!("Added numerical feature {}: {}", self.id, self.name);
 
         self.feat_type = FeatureType::OrdNum(num_feat_info);
     }
@@ -168,6 +170,11 @@ pub struct FeatureBitVecs {
 impl FeatureBitVecs {
     pub fn get_value(&self, fval_id: usize) -> NumT { self.value_map[fval_id] }
     pub fn get_card(&self) -> usize { self.card }
+    pub fn get_nbins(&self) -> usize {
+        if self.card == 0 || self.card == 1 { 0 } // this feature does not contain any information
+        else if self.card == 2 { 1 } // no need to check both options, first goes left, other right
+        else { self.card }
+    }
 
     pub fn get_bitvec(&self, fval_id: usize) -> BitVecRef {
         let range = self.ranges[fval_id];
@@ -313,7 +320,7 @@ impl Dataset {
                 FeatureType::Uninitialized => {},
                 _ => { continue; } // skip all features that are not uninitialized
             }
-            feature.gen_num_splitters(max_nbins);
+            feature.gen_num_feat_info(max_nbins);
         }
 
         Ok(())

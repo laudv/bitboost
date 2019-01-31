@@ -699,14 +699,14 @@ macro_rules! build_histograms {
 
             for feature in this.ctx.dataset.features() {
                 let feat_id = feature.id();
-                let nbuckets = feature.get_nbins();
 
                 match feature.get_feature_type() {
                     FeatureType::Uninitialized => panic!("uninitialized feature"),
 
                     // bucket for each categorical feature value
                     FeatureType::NomCat(ref bitvecs) | FeatureType::OrdCat(ref bitvecs) => {
-                        for fval_id in 0..nbuckets {
+                        let nbins = bitvecs.get_nbins();
+                        for fval_id in 0..nbins {
                             let fval_mask = bitvecs.get_bitvec(fval_id);
                             let (grad_sum, example_count) = get_grad_sum(this, n2s, &fval_mask);
                             let histval = HistVal { grad_sum, example_count };
