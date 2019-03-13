@@ -3,12 +3,14 @@ use crate::NumT;
 pub struct Config {
 
     // Dataset
-    pub target_feature_id: isize,
+    pub target_feature: isize,
 
     pub csv_has_header: bool,
-    pub csv_separator: char,
+    pub csv_separator: char, // TODO remove
+    pub csv_delimiter: u8,
 
     pub categorical_columns: Vec<usize>,
+    pub max_cardinality: usize,
 
     pub objective: String,
 
@@ -26,6 +28,9 @@ pub struct Config {
     /// compression. Disable by setting to 1.0 or higher.
     pub compression_threshold: NumT,
 
+    pub random_seed: u64,
+    pub feature_fraction: NumT,
+    pub example_fraction: NumT,
 
     // Boosting
     pub learning_rate: NumT,
@@ -35,12 +40,14 @@ pub struct Config {
 impl Config {
     pub fn new() -> Config {
         Config {
-            target_feature_id: -1,
+            target_feature: -1,
 
             csv_has_header: true,
             csv_separator: ',',
+            csv_delimiter: b',',
 
             categorical_columns: Vec::new(),
+            max_cardinality: 64,
 
             objective: String::from("L2"),
 
@@ -54,6 +61,10 @@ impl Config {
             discr_nbits: 4,
 
             compression_threshold: 0.5,
+
+            random_seed: 1,
+            feature_fraction: 1.0,
+            example_fraction: 1.0,
 
             learning_rate: 0.1,
             niterations: 100,

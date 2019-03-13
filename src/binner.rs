@@ -16,6 +16,7 @@ pub fn linpol_delta(min_value: NumT, delta: NumT, bin: usize, nbins: usize) -> N
     min_value + bin.min(nbins - 1) as NumT * delta
 }
 
+// TODO remove deprecated
 pub struct Binner<'a, T, Comb>
 where T: Clone,
       Comb: Fn(&mut T, T),

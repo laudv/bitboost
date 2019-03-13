@@ -248,7 +248,7 @@ impl Dataset {
 
         // Find target feature
         let target_id = {
-            let t = config.target_feature_id;
+            let t = config.target_feature;
             if t < 0 { raws.len().wrapping_sub((-t) as usize) }
             else     { t as usize }
         };

@@ -14,7 +14,7 @@ pub fn main() {
     pretty_env_logger::init();
 
     let mut config = Config::new();
-    config.target_feature_id = -1;
+    config.target_feature = -1;
     config.categorical_columns = (0..16).collect();
     config.max_tree_depth = 6;
     config.discr_nbits = 4;
@@ -33,7 +33,7 @@ pub fn main() {
     let mut context = TreeLearnerContext::new(&config, &dataset);
 
     let mut obj = objective::Binary::new();
-    obj.initialize(&targets);
+    obj.initialize(&config, &targets);
     obj.update(&targets);
 
     println!("Bias = {}", obj.bias());
@@ -49,7 +49,7 @@ pub fn main() {
              elapsed.subsec_micros() as f32 * 1e-3) / r as f32);
 
     // Results
-    objective.initialize(targets);
+    objective.initialize(&config, targets);
     objective.update(targets);
     let learner = TreeLearner::new(&mut context, objective.as_mut());
     let mut tree = learner.train();
