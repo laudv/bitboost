@@ -492,6 +492,14 @@ where B: Borrow<[BitBlock]> {
         blocks[i].get_bit(j)
     }
 
+    pub fn enable_bit(&mut self, index: usize)
+    where B: BorrowMut<[BitBlock]> {
+        let i = index / BitBlock::nbits();
+        let j = index % BitBlock::nbits();
+        let blocks = self.blocks.borrow_mut();
+        blocks[i].enable_bit(j)
+    }
+
     pub fn set_bit(&mut self, index: usize, bit: bool)
     where B: BorrowMut<[BitBlock]> {
         let i = index / BitBlock::nbits();

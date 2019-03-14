@@ -2,14 +2,15 @@ use std::io::Read;
 use std::path::Path;
 use std::fs::File;
 use std::rc::Rc;
+use std::cmp::Ordering;
 
 use csv;
-use fnv::{FnvHashSet as HashSet, FnvHashMap as HashMap};
 
-use crate::{NumT, NumT_uint, POS_INF, NEG_INF, into_uint};
+use crate::{NumT, POS_INF, NEG_INF, into_cat};
 use crate::config::Config;
 use crate::slice_store::{SliceRange, BitBlockStore, BitVecRef};
-use crate::binner::Binner;
+use crate::new_binner::Binner;
+use crate::simd;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FeatType {
@@ -48,6 +49,7 @@ impl Data {
         let mut features = Vec::<Vec<NumT>>::new();
         let mut limits = Vec::new();
         let mut ftypes = Vec::new();
+        let mut cards = Vec::new();
         let mut record = csv::StringRecord::new();
         let mut reader = csv::ReaderBuilder::new()
             .has_headers(config.csv_has_header)
@@ -63,6 +65,10 @@ impl Data {
                         record_len = record.len();
                         features.resize(record_len, Vec::new());
                         limits.resize(record_len, (POS_INF, NEG_INF));
+                        ftypes.resize(record_len, FeatType::Numerical);
+                        config.categorical_columns.iter()
+                            .for_each(|&c| if c<record_len { ftypes[c] = FeatType::Categorical; });
+                        cards.resize(record_len, 0);
                     }
 
                     for i in 0..record_len {
@@ -72,16 +78,17 @@ impl Data {
 
                         features[i].push(value);
                         limits[i] = { let l = limits[i]; (l.0.min(value), l.1.max(value)) };
+                        if ftypes[i] == FeatType::Categorical {
+                            if value.round() != value || value < 0.0 {
+                                return Err(format!("Invalid categorical value {} at record {}",
+                                           value, record_count));
+                            }
+                            cards[i] = cards[i].max(1 + into_cat(value) as usize);
+                        }
                     }
                 }
             }
             record_count += 1;
-        }
-
-        // extract feature types from config
-        ftypes.resize(record_len, FeatType::Numerical);
-        for &i in &config.categorical_columns {
-            if i < record_len { ftypes[i] = FeatType::Categorical; }
         }
 
         // extract feature names from header
@@ -94,48 +101,15 @@ impl Data {
                 .for_each(|(i, name)| names[i].push_str(name));
         }
 
-        // construct data struct
-        let mut data = Data {
+        Ok(Data {
             names,
             nfeatures: record_len - 1, // last is target
             nexamples: record_count,
             features,
             limits,
             ftypes,
-            cards: Vec::new(),
-        };
-        data.compute_cardinalities();
-        Ok(data)
-    }
-
-    fn compute_cardinalities(&mut self) {
-        let cat_msg = "Categorical features values must be integers in [0,card)";
-        let mut card_sets = vec![HashSet::default(); self.nfeatures()];
-
-        // Check categorical values and accumulate cardinalities
-        for feat_id in 0..self.nfeatures() {
-            if self.feat_type(feat_id) != FeatType::Categorical { continue; }
-
-            let (_, max) = self.feat_limits(feat_id);
-            for &value in self.get_feature(feat_id) {
-                assert!(value == value.round(), cat_msg);
-                assert!(0.0 <= value && value <= max, cat_msg);
-                card_sets[feat_id].insert(into_uint(value));
-            }
-        }
-
-        self.cards = card_sets.into_iter().map(|s| s.len()).collect();
-
-        // Check cardinalities
-        for feat_id in 0..self.nfeatures() {
-            if self.feat_type(feat_id) != FeatType::Categorical { continue; }
-
-            let card = self.feat_card(feat_id);
-            let (min, max) = self.feat_limits(feat_id);
-
-            assert!(min == 0.0, cat_msg);
-            assert!(max == (card - 1) as NumT, cat_msg);
-        }
+            cards,
+        })
     }
 
     pub fn nfeatures(&self) -> usize { self.nfeatures }
@@ -162,6 +136,12 @@ pub struct Dataset<'a> {
     /// The original data as read from the data file.
     data: &'a Data,
 
+    /// The target feature
+    target: &'a [NumT],
+
+    /// Min and max value of target
+    target_lims: (NumT, NumT),
+
     /// Feature sub-selection.
     feat_sel: Vec<usize>,
 
@@ -176,23 +156,29 @@ pub struct Dataset<'a> {
 
     /// For high cardinality categorical features, a list of hashsets is maintained containing all
     /// possible values per split (for an IN-SPLIT). For other features, this list is empty.
-    split_value_sets: Vec<Vec<Rc<HashSet<NumT>>>>,
+    super_categories: Vec<Rc<Vec<usize>>>,
 
     /// For numerical and low-cardinality categorical features, store list of possible split
     /// values.
     split_values: Vec<Vec<NumT>>,
+
+    /// Bins buffer for quantile approximation using Binner.
+    bins_buffer: Vec<u32>,
 }
 
 impl <'a> Dataset<'a> {
-    fn new(data: &'a Data) -> Dataset<'a> {
+    fn new(data: &'a Data, target: &'a [NumT]) -> Dataset<'a> {
         Dataset {
             data,
+            target,
+            target_lims: (0.0, 0.0),
             feat_sel: Vec::new(),
             example_sel: Vec::new(),
             store: BitBlockStore::new(1024),
             bitvecs: Vec::new(),
-            split_value_sets: Vec::new(),
+            super_categories: Vec::new(),
             split_values: Vec::new(),
+            bins_buffer: vec![0; 1024],
         }
     }
 
@@ -201,12 +187,12 @@ impl <'a> Dataset<'a> {
         self.example_sel.clear();
         self.store.reset();
         self.bitvecs.clear();
-        self.split_value_sets.clear();
+        self.super_categories.clear();
         self.split_values.clear();
     }
 
-    pub fn construct_from_data(config: &Config, data: &'a Data) -> Dataset<'a> {
-        let mut dataset = Dataset::new(data);
+    pub fn construct_from_data(config: &Config, data: &'a Data, target: &'a [NumT]) -> Dataset<'a> {
+        let mut dataset = Dataset::new(data, target);
         dataset.construct_again_no_reset(config);
         dataset
     }
@@ -226,27 +212,30 @@ impl <'a> Dataset<'a> {
         self.example_sel.resize(k, 0);
         self.feat_sel.resize(l, 0);
         self.bitvecs.resize(m, Vec::new());
-        self.split_value_sets.resize(m, Vec::new());
+        self.super_categories.resize(m, Rc::new(Vec::new()));
         self.split_values.resize(m, Vec::new());
 
         // Bagging and feature sub-selection
-        sample(n, &mut self.example_sel, config.random_seed);
+        if n == k { self.example_sel.iter_mut().enumerate().for_each(|(i, x)| *x = i); }
+        else      { sample(n, &mut self.example_sel, config.random_seed); }
         reservoir_sample(m, &mut self.feat_sel, config.random_seed + 10);
+        self.target_lims = self.example_sel.iter()
+            .map(|&i| self.target[i])
+            .fold((0.0, 0.0), |a, t| (a.0.min(t), a.1.max(t)));
 
         // Feature preprocessing
         for u in 0..l {
             let feat_id = self.feat_sel[u];
 
             // determine type of feature:
-            // [1] low-cardinality categorical = explicitly categorical + card <= max_card
-            // [2] high-cardinality categorical = explicitly categorical + card > max_card
+            // [1] low-cardinality categorical = explicitly categorical + card < max_card
+            // [2] high-cardinality categorical = explicitly categorical + card >= max_card
             // [3] numerical = other
-
             if self.data.feat_type(feat_id) == FeatType::Categorical {
                 if self.data.feat_card(feat_id) < config.max_cardinality {
                     self.preprocess_locard_cat(feat_id);
                 } else {
-                    self.preprocess_hicard_cat(feat_id);
+                    self.preprocess_hicard_cat(feat_id, config.max_cardinality);
                 }
             } else {
                 self.preprocess_num(feat_id);
@@ -259,19 +248,8 @@ impl <'a> Dataset<'a> {
         let n = self.nexamples();
         let data = self.data.get_feature(feat_id);
         let card = self.data.feat_card(feat_id);
-        let mut bitvecs = Vec::with_capacity(card);
-
-        for _ in 0..card {
-            bitvecs.push(self.store.alloc_zero_bits(n));
-        }
-
-        for u in 0..n {
-            let i = self.example_sel[u];
-            let x = data[i] as usize;
-            let mut bitvec = self.store.get_bitvec_mut(bitvecs[x]);
-            bitvec.set_bit(u, true);
-        }
-
+        let iter = self.example_sel.iter().map(|&i| data[i]);
+        let bitvecs = construct_bitvecs(&mut self.store, n, card, iter, |x| into_cat(x) as usize);
         self.bitvecs[feat_id] = bitvecs;
     }
 
@@ -279,32 +257,73 @@ impl <'a> Dataset<'a> {
     /// - Sort by accumulated value (-> becomes ordered)
     /// - Generate candidate split values using quantile estimates
     /// - Generate bitsets for IN-SPLITs
-    fn preprocess_hicard_cat(&mut self, feat_id: usize) {
+    fn preprocess_hicard_cat(&mut self, feat_id: usize, max_cardinality: usize) {
         let n = self.nexamples();
-        let data = self.data.get_feature(feat_id);
+        let feature = self.data.get_feature(feat_id);
         let card = self.data.feat_card(feat_id);
-        let target = self.data.get_feature(self.data.target_id());
-        let mut map = HashMap::<NumT_uint, (NumT, u32)>::with_capacity_and_hasher(
-            card, Default::default());
+        let target = self.target;
 
-        // accumalate target values
+        // collect target sums & counts per category value
+        let mut target_stat_pairs: Vec<(NumT, u32)> = vec![(0.0, 0); card];
         for u in 0..n {
             let i = self.example_sel[u];
-            let x = data[i];
-            let e = map.entry(into_uint(x)).or_insert((0.0, 0));
-            *e = (e.0 + target[i], e.1 + 1);
+            let category = into_cat(feature[i]) as usize;
+            let entry = &mut target_stat_pairs[category];
+            entry.0 += target[i];
+            entry.1 += 1;
         }
 
-        // calculate mean of target values for each cat. value
-        let mut bins = Vec::<(HashSet<NumT>, u32)>::new(); // --> replace HashSet by bitvecs?
-        //let mut binner = Binner::new(&mut bins, self.data.feat_limits(feat_id),
-        //    |bin: &mut (HashSet<NumT>, u32), d: NumT| {
-        //        bin.0.insert(d);
-        //    });
-
-        for (cat, (sum, count)) in map.iter() {
-
+        // accumulate category values: mean -> this determines their ordering
+        // combine similar categories using quantile estimations
+        self.bins_buffer.iter_mut().for_each(|b| *b = 0);
+        let mut binner = Binner::new(&mut self.bins_buffer, self.target_lims);
+        let combiner = |bin: &mut u32, d: u32| *bin += d;
+        for (sum, count) in target_stat_pairs.iter_mut() {
+            if *count != 0 {
+                *sum /= *count as NumT;
+                binner.insert(*sum, *count, combiner);
+            }
         }
+
+        // extract approximate quantiles from bins
+        let extractor = |bin: &u32| *bin;
+        let rank_step = n as NumT / max_cardinality as NumT;
+        let half_rank_step = rank_step * 0.5;
+        let ranks = (0..max_cardinality - 1).map(|i| {
+            (half_rank_step + (i as NumT) * rank_step).ceil() as u32
+        });
+        let qbins = binner.rank_iter(ranks, extractor);
+        let mut last_bin = usize::max_value();
+        let mut split_weights = Vec::with_capacity(max_cardinality);
+        for (bin, _, _) in qbins {
+            if bin == last_bin { continue; }
+            last_bin = bin;
+            split_weights.push(binner.bin_representative(bin));
+        }
+        split_weights.push(POS_INF); // last super-category contains everything else (< +inf)
+        let super_card = split_weights.len();
+        debug_assert!(super_card <= max_cardinality);
+
+        // generate mapping: category -> super category
+        let mut super_categories = vec![0usize; card];
+        for (category, &(mean, _))  in target_stat_pairs.iter().enumerate() {
+            let super_category = split_weights.binary_search_by(|&x| {
+                if x < mean { Ordering::Less }
+                else { Ordering::Greater }
+            }).expect_err("in this universe, nothing is equal (see cmp impl above this line)");
+            super_categories[category] = super_category;
+            //println!("category {:?} -> {:?} [mean {} < {:?}]", category, super_category, mean,
+            //         split_weights.get(super_category));
+        }
+
+        // generate bitvecs
+        let iter = self.example_sel.iter().map(|&i| feature[i]);
+        let bitvecs = construct_bitvecs(&mut self.store, n, super_card, iter,
+                                        |x| super_categories[into_cat(x) as usize]);
+        transform_bitvecs_to_ord(&mut self.store, &bitvecs);
+
+        self.bitvecs[feat_id] = bitvecs;
+        self.super_categories[feat_id] = Rc::new(super_categories);
     }
 
     /// - Generate too many split value candidates using quantile estimates.
@@ -330,14 +349,14 @@ impl <'a> Dataset<'a> {
         }
     }
 
-    pub fn get_split_value_set(&self, feat_id: usize, split_id: usize) -> &Rc<HashSet<NumT>> {
-        let feat_sets = &self.split_value_sets[feat_id];
-        if feat_sets.is_empty() {
-            panic!("no split sets for feature {}", feat_id);
-        } else {
-            &feat_sets[split_id]
-        }
-    }
+    //pub fn get_split_value_set(&self, feat_id: usize, split_id: usize) -> &Rc<Vec<usize>> {
+    //    let feat_sets = &self.super_categories[feat_id];
+    //    if feat_sets.is_empty() {
+    //        panic!("no split sets for feature {}", feat_id);
+    //    } else {
+    //        &feat_sets[split_id]
+    //    }
+    //}
 
     pub fn data(&self) -> &Data {
         self.data
@@ -364,7 +383,7 @@ fn sample(n: usize, buffer: &mut [usize], seed: u64) {
 
     let mut rng: SmallRng = SmallRng::seed_from_u64(seed);
     buffer.iter_mut().for_each(|i| *i = rng.gen_range(0, n));
-    buffer.sort();
+    buffer.sort_unstable();
 }
 
 fn reservoir_sample(n: usize, buffer: &mut [usize], seed: u64) {
@@ -381,8 +400,35 @@ fn reservoir_sample(n: usize, buffer: &mut [usize], seed: u64) {
             if r < k { buffer[r] = i }
         }
     }
-    buffer.sort();
+    buffer.sort_unstable();
 }
+
+fn construct_bitvecs<Iter, CatMap>(store: &mut BitBlockStore, nexamples: usize, card: usize,
+                                   iter: Iter, numt_2_cat: CatMap)
+    -> Vec<SliceRange>
+where Iter: Iterator<Item=NumT>,
+      CatMap: Fn(NumT) -> usize,
+{
+    let mut bitvecs = Vec::with_capacity(card);
+    for _ in 0..card { bitvecs.push(store.alloc_zero_bits(nexamples)); }
+
+    for (i, x) in iter.enumerate() {
+        let category = (numt_2_cat)(x) as usize;
+        let mut bitvec = store.get_bitvec_mut(bitvecs[category]);
+        bitvec.enable_bit(i);
+    }
+
+    bitvecs
+}
+
+fn transform_bitvecs_to_ord(store: &mut BitBlockStore, bitvecs: &[SliceRange]) {
+    for (&r0, &r1) in bitvecs[0..].iter().zip(bitvecs[1..].iter()) {
+        let (bv0, mut bv1) = store.get_two_bitvecs_mut(r0, r1);
+        unsafe { simd::or_assign(&mut bv1, &bv0); }
+    }
+}
+
+
 
 
 
@@ -474,7 +520,8 @@ mod test {
         assert_eq!(data.nexamples(), 8);
         assert_eq!(data.feat_card(1), 3);
 
-        let dataset = Dataset::construct_from_data(&config, &data);
+        let target = data.get_feature(data.target_id());
+        let dataset = Dataset::construct_from_data(&config, &data, target);
 
         assert_eq!(dataset.feat_sel.len(), 2);
         assert_eq!(dataset.example_sel.len(), 6);
@@ -485,6 +532,39 @@ mod test {
         let values = vec![0b110001, 0b000110, 0b001000];
         for i in 0..3 {
             let bitvec = dataset.store.get_bitvec(ranges[i]);
+            let x = bitvec.cast::<u32>()[0];
+            println!("{:3}: {:032b}", i, x);
+            assert_eq!(values[i], x);
+        }
+    }
+
+    #[test]
+    fn dataset_hicard_cat() {
+        let mut config = Config::new();
+        config.csv_has_header = false;
+        config.categorical_columns = vec![0];
+        config.max_cardinality = 8;
+        let d = "1,1\n1,1\n2,1\n2,1\n3,2\n3,2\n4,2\n4,2\n5,3\n5,3\n6,3\n6,3\n7,4\n7,4\n8,4\n8,4\n\
+                 9,5\n9,5\n10,5\n10,5\n11,6\n11,6\n12,6\n12,6\n13,7\n13,7\n14,7\n14,7\n15,8\n15,8\
+                 \n16,8\n16,8";
+        let data = Data::from_csv(&config, d).unwrap();
+
+        dbg!(&data.features);
+
+        let target = data.get_feature(data.target_id());
+        let dataset = Dataset::construct_from_data(&config, &data, target);
+
+        let ranges = &dataset.bitvecs[0];
+        let values = vec![0b00000000000000000000000000001111u32,
+                          0b00000000000000000000000011111111,
+                          0b00000000000000000000111111111111,
+                          0b00000000000000001111111111111111,
+                          0b00000000000011111111111111111111,
+                          0b00000000111111111111111111111111,
+                          0b00001111111111111111111111111111,
+                          0b11111111111111111111111111111111];
+        for (i, &r) in ranges.iter().enumerate() {
+            let bitvec = dataset.store.get_bitvec(r);
             let x = bitvec.cast::<u32>()[0];
             println!("{:3}: {:032b}", i, x);
             assert_eq!(values[i], x);

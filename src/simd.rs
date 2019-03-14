@@ -448,3 +448,18 @@ pub unsafe fn btslce_summ8_c(slice: &[BitBlock], indices: &[BitBlock], nm: &[Bit
 
     harvey_seal_32!((ptr1, ptr2, ptr3, ptr4), nblocks, load_mask_and_u32_w8_c, reduce32_8)
 }
+
+
+
+
+
+// ------------------------------------------------------------------------------------------------
+
+pub unsafe fn or_assign(bv0: &mut [BitBlock], bv1: &[BitBlock]) {
+    debug_assert_eq!(bv0.len(), bv1.len());
+    for (b0, b1) in bv0.iter_mut().zip(bv1.iter()) {
+        let p0 = b0.as_mut_ptr() as *mut __m256i;
+        let p1 = b1.as_ptr() as *const __m256i;
+        *p0 = _mm256_or_si256(*p0, *p1);
+    }
+}
