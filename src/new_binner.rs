@@ -1,3 +1,5 @@
+use std::ops::AddAssign;
+
 use crate::NumT;
 
 pub struct Binner<'a, BinT> {
@@ -29,56 +31,28 @@ impl <'a, BinT> Binner<'a, BinT> {
         (combiner)(bin, data);
     }
 
-    pub fn bin_with_rank<F>(&self, rank: u32, extractor: F) -> (usize, u32, u32)
+    pub fn bin_with_rank<F>(&self, rank: u32, extractor: F) -> usize
     where F: Fn(&BinT) -> u32,
     {
-        //let mut accum = I::default();
-        //let mut prev_accum = I::default();
-        //let mut bin = 0;
-        //for b in self.bins.iter() {
-        //    let x = (extractor)(b);
-        //    bin += 1;
-        //    prev_accum = accum;
-        //    accum = accum + x;
-        //    if accum > rank { break; }
-        //}
-
-        //debug_assert!(bin <= self.bins.len());
-
-        //(bin - 1, prev_accum, accum)
-        
         let ranks = [rank];
         let iter = (&ranks).iter().cloned();
         self.rank_iter(iter, extractor).next().unwrap()
     }
 
-    pub fn rank_iter<'b, Iter, F>(&'b self, ranks: Iter, extractor: F)
-        -> RankIter<'b, BinT, Iter, F>
-    where Iter: Iterator<Item=u32>,
-          F: Fn(&BinT) -> u32,
+    pub fn rank_iter<'b, R, Iter, F>(&'b self, ranks: Iter, extractor: F)
+        -> RankIter<'b, R, BinT, Iter, F>
+    where R: Copy + Default + PartialOrd + AddAssign,
+          Iter: Iterator<Item=R>,
+          F: Fn(&BinT) -> R,
     {
         RankIter {
             bins: self.bins,
             ranks,
             extractor,
-            accum: 0,
-            prev_accum: 0,
+            accum: Default::default(),
+            prev_accum: Default::default(),
             bin_index: 0,
         }
-    }
-
-    /// Iterate over all bins containing the items with the given quantiles. Count is the total
-    /// number of elements that are considered to be in this structure.
-    /// TODO remove
-    pub fn quantile_iter<'b, Iter, F>(&'b self, quantiles: Iter, count: usize,
-                                               extractor: F)
-        -> impl Iterator<Item = (usize, u32, u32)> + 'b
-    where Iter: Iterator<Item=NumT> + 'b,
-          F: Fn(&BinT) -> u32 + 'b,
-    {
-        let count = count as NumT;
-        let ranks = quantiles.map(move |q| (q.max(0.0).min(1.0) * count).round() as u32);
-        self.rank_iter(ranks, extractor)
     }
 
     pub fn bin_representative(&self, bin: usize) -> NumT {
@@ -92,29 +66,28 @@ impl <'a, BinT> Binner<'a, BinT> {
     }
 }
 
-pub struct RankIter<'a, BinT, Iter, F>
-where Iter: Iterator<Item=u32>,
-      F: Fn(&BinT) -> u32,
+pub struct RankIter<'a, R, BinT, Iter, F>
+where Iter: Iterator<Item=R>,
+      F: Fn(&BinT) -> R,
 {
     bins: &'a [BinT],
     ranks: Iter,
     extractor: F,
-    accum: u32,
-    prev_accum: u32,
+    accum: R,
+    prev_accum: R,
     bin_index: usize,
 }
 
-impl <'a, BinT, Iter, F> Iterator for RankIter<'a, BinT, Iter, F>
-where Iter: Iterator<Item=u32>,
-      F: Fn(&BinT) -> u32,
+impl <'a, R, BinT, Iter, F> Iterator for RankIter<'a, R, BinT, Iter, F>
+where R: Copy + PartialOrd + AddAssign + std::fmt::Display,
+      Iter: Iterator<Item=R>,
+      F: Fn(&BinT) -> R,
 {
-    type Item = (usize, u32, u32);
+    type Item = usize;
     fn next(&mut self) -> Option<Self::Item> {
         let rank = self.ranks.next();
         if rank.is_none() { return None; }
         let rank = rank.unwrap();
-
-        println!("rank = {}", rank);
 
         while self.accum <= rank && self.bin_index < self.bins.len() {
             let x = (self.extractor)(&self.bins[self.bin_index]);
@@ -125,10 +98,22 @@ where Iter: Iterator<Item=u32>,
 
         debug_assert!(self.accum >= rank);
         debug_assert!(self.bin_index <= self.bins.len());
-        Some((self.bin_index - 1, self.prev_accum, self.accum))
+
+        println!("RankIter: bin {} [{} - {}]", self.bin_index-1, self.prev_accum, self.accum);
+
+        Some(self.bin_index - 1)
     }
 }
 
+impl <'a, R, BinT, Iter, F> RankIter<'a, R, BinT, Iter, F>
+where R: Copy + PartialOrd + AddAssign,
+      Iter: Iterator<Item=R>,
+      F: Fn(&BinT) -> R,
+{
+    pub fn accum(&self) -> (R, R) {
+        (self.prev_accum, self.accum)
+    }
+}
 
 
 
@@ -169,23 +154,15 @@ mod test {
         assert_eq!(b.bin_representative(2), 0.50);
         assert_eq!(b.bin_representative(3), 0.75);
 
-        let rank_tuples = vec![(0, 0, 4), (0, 0, 4), (0, 0, 4), (0, 0, 4), (1, 4, 6), (1, 4, 6),
-            (2, 6, 8), (2, 6, 8), (3, 8, 12), (3, 8, 12), (3, 8, 12), (3, 8, 12)];
-
+        let bins = vec![0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 3, 3];
         for i in 0..=11 {
-            assert_eq!(b.bin_with_rank(i as u32, extractor), rank_tuples[i]);
+            assert_eq!(b.bin_with_rank(i as u32, extractor), bins[i]);
         }
 
         let ranks = (0..=11).collect::<Vec<u32>>();
-        let bins = b.rank_iter(ranks.iter().cloned(), extractor);
-        for (i, bin) in bins.enumerate() {
-            assert_eq!(bin, rank_tuples[i]);
-        }
-
-        let quantiles = (0..=11).map(|i| i as NumT / 12.0).collect::<Vec<NumT>>();
-        let bins = b.quantile_iter(quantiles.iter().cloned(), 12, extractor);
-        for (i, bin) in bins.enumerate() {
-            assert_eq!(bin, rank_tuples[i]);
+        let rank_iter = b.rank_iter(ranks.iter().cloned(), extractor);
+        for (i, bin) in rank_iter.enumerate() {
+            assert_eq!(bin, bins[i]);
         }
 
         assert_eq!(&v, &[4, 2, 2, 4]);
