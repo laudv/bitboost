@@ -10,7 +10,7 @@ pub struct Config {
     pub csv_delimiter: u8,
 
     pub categorical_columns: Vec<usize>,
-    pub max_cardinality: usize,
+    pub max_nbins: usize,
 
     pub objective: String,
 
@@ -47,7 +47,7 @@ impl Config {
             csv_delimiter: b',',
 
             categorical_columns: Vec::new(),
-            max_cardinality: 64,
+            max_nbins: 16,
 
             objective: String::from("L2"),
 

@@ -14,7 +14,8 @@ use crate::simd;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FeatType {
-    Categorical,
+    LoCardCat,
+    HiCardCat,
     Numerical,
 }
 
@@ -26,7 +27,7 @@ pub struct Data {
     features: Vec<Vec<NumT>>,
     limits: Vec<(NumT, NumT)>, // feature min / max value
     ftypes: Vec<FeatType>,
-    cards: Vec<usize>, // counts up to config.max_cardinality+1
+    cards: Vec<usize>, // only for categorical
 }
 
 impl Data {
@@ -67,7 +68,7 @@ impl Data {
                         limits.resize(record_len, (POS_INF, NEG_INF));
                         ftypes.resize(record_len, FeatType::Numerical);
                         config.categorical_columns.iter()
-                            .for_each(|&c| if c<record_len { ftypes[c] = FeatType::Categorical; });
+                            .for_each(|&c| if c<record_len { ftypes[c] = FeatType::LoCardCat; });
                         cards.resize(record_len, 0);
                     }
 
@@ -78,7 +79,7 @@ impl Data {
 
                         features[i].push(value);
                         limits[i] = { let l = limits[i]; (l.0.min(value), l.1.max(value)) };
-                        if ftypes[i] == FeatType::Categorical {
+                        if ftypes[i] == FeatType::LoCardCat {
                             if value.round() != value || value < 0.0 {
                                 return Err(format!("Invalid categorical value {} at record {}",
                                            value, record_count));
@@ -89,6 +90,14 @@ impl Data {
                 }
             }
             record_count += 1;
+        }
+
+        // update feature types to high cardinality categorical if cards exceeds max_nbins
+        for j in 0..record_len {
+            if cards[j] > config.max_nbins {
+                debug_assert!(ftypes[j] == FeatType::LoCardCat);
+                ftypes[j] = FeatType::HiCardCat;
+            }
         }
 
         // extract feature names from header
@@ -120,6 +129,7 @@ impl Data {
     pub fn feat_card(&self, feat_id: usize) -> usize { self.cards[feat_id] }
     pub fn target_id(&self) -> usize { self.nfeatures }
     pub fn get_feature(&self, feat_id: usize) -> &[NumT] { &self.features[feat_id] }
+    pub fn get_target(&self) -> &[NumT] { &self.features[self.target_id()] }
 }
 
 
@@ -133,14 +143,16 @@ impl Data {
 
 /// A 'Data' struct with all the necessary bitsets for training.
 pub struct Dataset<'a> {
+    max_nbins: usize,
+
     /// The original data as read from the data file.
     data: &'a Data,
 
-    /// The target feature
-    target: &'a [NumT],
+    /// The gradients
+    gradient: &'a [NumT],
 
-    /// Min and max value of target
-    target_lims: (NumT, NumT),
+    /// Min and max value of gradient
+    gradient_lims: (NumT, NumT),
 
     /// Feature sub-selection.
     feat_sel: Vec<usize>,
@@ -167,11 +179,12 @@ pub struct Dataset<'a> {
 }
 
 impl <'a> Dataset<'a> {
-    fn new(data: &'a Data, target: &'a [NumT]) -> Dataset<'a> {
+    fn new(max_nbins: usize, data: &'a Data, gradient: &'a [NumT]) -> Dataset<'a> {
         Dataset {
+            max_nbins,
             data,
-            target,
-            target_lims: (0.0, 0.0),
+            gradient,
+            gradient_lims: (0.0, 0.0),
             feat_sel: Vec::new(),
             example_sel: Vec::new(),
             store: BitBlockStore::new(1024),
@@ -192,8 +205,10 @@ impl <'a> Dataset<'a> {
         self.split_values.clear();
     }
 
-    pub fn construct_from_data(config: &Config, data: &'a Data, target: &'a [NumT]) -> Dataset<'a> {
-        let mut dataset = Dataset::new(data, target);
+    pub fn construct_from_data(config: &Config, data: &'a Data, gradient: &'a [NumT])
+        -> Dataset<'a>
+    {
+        let mut dataset = Dataset::new(config.max_nbins, data, gradient);
         dataset.construct_again_no_reset(config);
         dataset
     }
@@ -220,8 +235,8 @@ impl <'a> Dataset<'a> {
         if n == k { self.example_sel.iter_mut().enumerate().for_each(|(i, x)| *x = i); }
         else      { sample(n, &mut self.example_sel, config.random_seed); }
         reservoir_sample(m, &mut self.feat_sel, config.random_seed + 10);
-        self.target_lims = self.example_sel.iter()
-            .map(|&i| self.target[i])
+        self.gradient_lims = self.example_sel.iter() // TODO objective also computes "bounds" of gradients
+            .map(|&i| self.gradient[i])
             .fold((0.0, 0.0), |a, t| (a.0.min(t), a.1.max(t)));
 
         // Feature preprocessing
@@ -229,17 +244,13 @@ impl <'a> Dataset<'a> {
             let feat_id = self.feat_sel[u];
 
             // determine type of feature:
-            // [1] low-cardinality categorical = explicitly categorical + card < max_card
-            // [2] high-cardinality categorical = explicitly categorical + card >= max_card
+            // [1] low-cardinality categorical = explicitly categorical + card < max_nbins
+            // [2] high-cardinality categorical = explicitly categorical + card >= max_nbins
             // [3] numerical = other
-            if self.data.feat_type(feat_id) == FeatType::Categorical {
-                if self.data.feat_card(feat_id) < config.max_cardinality {
-                    self.preprocess_locard_cat(feat_id);
-                } else {
-                    self.preprocess_hicard_cat(feat_id, config.max_cardinality);
-                }
-            } else {
-                self.preprocess_num(feat_id, config.max_cardinality);
+            match self.feat_type(feat_id) {
+                FeatType::LoCardCat => self.preprocess_locard_cat(feat_id),
+                FeatType::HiCardCat => self.preprocess_hicard_cat(feat_id),
+                FeatType::Numerical => self.preprocess_num(feat_id),
             }
         }
     }
@@ -254,31 +265,31 @@ impl <'a> Dataset<'a> {
         self.bitvecs[feat_id] = bitvecs;
     }
 
-    /// - Accumulate target mean for each categorical value.
+    /// - Accumulate gradient mean for each categorical value.
     /// - Sort by accumulated value (-> becomes ordered)
     /// - Generate candidate split values using quantile estimates
     /// - Generate bitsets for IN-SPLITs
-    fn preprocess_hicard_cat(&mut self, feat_id: usize, max_card: usize) {
+    fn preprocess_hicard_cat(&mut self, feat_id: usize) {
         let n = self.nexamples();
         let data = self.data.get_feature(feat_id);
         let card = self.data.feat_card(feat_id);
-        let target = self.target;
+        let gradient = self.gradient;
 
-        // collect target sums & counts per category value
-        let mut target_stat_pairs: Vec<(NumT, u32)> = vec![(0.0, 0); card];
+        // collect gradient sums & counts per category value
+        let mut grad_stat_pairs: Vec<(NumT, u32)> = vec![(0.0, 0); card];
         for (i, x) in self.example_sel.iter().map(|&i| data[i]).enumerate() {
             let category = into_cat(x) as usize;
-            let entry = &mut target_stat_pairs[category];
-            entry.0 += target[i];
+            let entry = &mut grad_stat_pairs[category];
+            entry.0 += gradient[i];
             entry.1 += 1;
         }
 
         // accumulate category values: mean -> this determines their ordering
         // combine similar categories using quantile estimations
         self.bins_buffer_u32.iter_mut().for_each(|b| *b = 0);
-        let mut binner = Binner::new(&mut self.bins_buffer_u32, self.target_lims);
+        let mut binner = Binner::new(&mut self.bins_buffer_u32, self.gradient_lims);
         let combiner = |bin: &mut u32, d: u32| *bin += d;
-        for (sum, count) in target_stat_pairs.iter_mut() {
+        for (sum, count) in grad_stat_pairs.iter_mut() {
             if *count != 0 {
                 *sum /= *count as NumT;
                 binner.insert(*sum, *count, combiner);
@@ -287,24 +298,24 @@ impl <'a> Dataset<'a> {
 
         // extract approximate quantiles from bins
         let extractor = |bin: &u32| *bin;
-        let rank_step = n as NumT / (max_card + 1) as NumT;
-        let ranks = (1..=max_card).map(|i| {
+        let rank_step = n as NumT / (self.max_nbins + 1) as NumT;
+        let ranks = (1..=self.max_nbins).map(|i| {
             (i as NumT * rank_step).round() as u32 - 1
         });
         let qbins = binner.rank_iter(ranks, extractor);
         let mut last_bin = usize::max_value();
-        let mut split_weights = Vec::with_capacity(max_card);
+        let mut split_weights = Vec::with_capacity(self.max_nbins);
         for bin in qbins {
             if bin == last_bin { continue; }
             last_bin = bin;
             split_weights.push(binner.bin_representative(bin));
         }
         let super_card = split_weights.len();
-        debug_assert!(super_card <= max_card);
+        debug_assert!(super_card <= self.max_nbins);
 
         // generate mapping: category -> super category
         let mut super_categories = vec![0usize; card];
-        for (category, &(mean, _))  in target_stat_pairs.iter().enumerate() {
+        for (category, &(mean, _))  in grad_stat_pairs.iter().enumerate() {
             let super_category = split_weights.binary_search_by(|&x| {
                 if x < mean { Ordering::Less }
                 else { Ordering::Greater }
@@ -329,30 +340,30 @@ impl <'a> Dataset<'a> {
 
     /// - Generate too many split value candidates using quantile estimates.
     /// - Treat the result as a high cardinality categorical 
-    fn preprocess_num(&mut self, feat_id: usize, max_card: usize) {
+    fn preprocess_num(&mut self, feat_id: usize) {
         let n = self.example_sel.len();
         let data = self.data.get_feature(feat_id);
         let lims = self.data.feat_limits(feat_id);
-        let target = self.target;
+        let gradient = self.gradient;
 
-        // quantile estimation, weighted by target values so there is variation in the limited
+        // quantile estimation, weighted by gradient values so there is variation in the limited
         // number of split candidates we generate
         self.bins_buffer_numt.iter_mut().for_each(|b| *b = 0.0);
         let mut binner = Binner::new(&mut self.bins_buffer_numt, lims);
-        let mut target_weight_sum = 0.0;
+        let mut grad_weight_sum = 0.0;
         let combiner = |bin: &mut NumT, d: NumT| *bin += d;
-        for (x, t) in self.example_sel.iter().map(|&i| (data[i], target[i] + EPSILON)) {
+        for (x, t) in self.example_sel.iter().map(|&i| (data[i], gradient[i] + EPSILON)) {
             // XXX Apply weight transformation?
-            target_weight_sum += t;
+            grad_weight_sum += t;
             binner.insert(x, t, combiner);
         }
 
         // extract approximate quantiles
-        let weight_step = target_weight_sum / (max_card + 1) as NumT;
-        let weights = (1..=max_card).map(|i| i as NumT * weight_step);
+        let weight_step = grad_weight_sum / (self.max_nbins + 1) as NumT;
+        let weights = (1..=self.max_nbins).map(|i| i as NumT * weight_step);
         let qbins = binner.rank_iter(weights, |bin| *bin);
         let mut last_bin = usize::max_value();
-        let mut split_values = Vec::with_capacity(max_card);
+        let mut split_values = Vec::with_capacity(self.max_nbins);
         for bin in qbins {
             if bin == last_bin { continue; }
             last_bin = bin;
@@ -379,11 +390,23 @@ impl <'a> Dataset<'a> {
 
     // ----------
     
+    /// Depending on the gradient values, the number of bitvecs can vary slightly, with a maximum
+    /// of 'max_nbins'. This method returns an upper bound of the nbins that is safe regardless of
+    /// the used gradients.
+    pub fn get_nbins(&self, feat_id: usize) -> usize {
+        match self.data.feat_type(feat_id) {
+            FeatType::LoCardCat => self.feat_card(feat_id),
+            FeatType::HiCardCat => self.max_nbins,
+            FeatType::Numerical => self.max_nbins,
+        }
+    }
+    
     pub fn get_bitvec(&self, feat_id: usize, split_id: usize) -> BitVecRef {
         let range = self.bitvecs[feat_id][split_id];
         self.store.get_bitvec(range)
     }
 
+    /// Get the split candidate value for a numerical feature
     pub fn get_split_value(&self, feat_id: usize, split_id: usize) -> NumT {
         let feat_values = &self.split_values[feat_id];
         if feat_values.is_empty() {
@@ -393,24 +416,28 @@ impl <'a> Dataset<'a> {
         }
     }
 
-    //pub fn get_split_value_set(&self, feat_id: usize, split_id: usize) -> &Rc<Vec<usize>> {
-    //    let feat_sets = &self.super_categories[feat_id];
-    //    if feat_sets.is_empty() {
-    //        panic!("no split sets for feature {}", feat_id);
-    //    } else {
-    //        &feat_sets[split_id]
-    //    }
-    //}
-
-    pub fn data(&self) -> &Data {
-        self.data
+    /// Get the super-category (category of categories) of a value of a high-cardinality
+    /// cateogrical feature.
+    pub fn get_super_category(&self, feat_id: usize, value: NumT) -> usize {
+        let super_categories = &self.super_categories[feat_id];
+        if super_categories.is_empty() {
+            panic!("no super categories for feature {}", feat_id);
+        } else {
+            super_categories[into_cat(value) as usize]
+        }
     }
 
-    pub fn feat_ids(&self) -> &[usize] {
-        &self.feat_sel
-    }
-
+    pub fn nfeatures(&self) -> usize { self.feat_sel.len() }
+    pub fn feat_ids(&self) -> &[usize] { &self.feat_sel }
     pub fn nexamples(&self) -> usize { self.example_sel.len() }
+    pub fn examples(&self) -> &[usize] { &self.example_sel }
+    pub fn feat_name(&self, feature: usize) -> &str { &self.data.names[feature] }
+    pub fn feat_limits(&self, feat_id: usize) -> (NumT, NumT) { self.data.limits[feat_id] }
+    pub fn feat_type(&self, feat_id: usize) -> FeatType { self.data.ftypes[feat_id] }
+    pub fn feat_card(&self, feat_id: usize) -> usize { self.data.cards[feat_id] }
+    pub fn get_feature(&self, feat_id: usize) -> &[NumT] { self.data.get_feature(feat_id) }
+    pub fn get_target(&self) -> &[NumT] { self.data.get_target() }
+    pub fn get_gradient(&self) -> &[NumT] { &self.gradient }
 }
 
 
@@ -579,14 +606,12 @@ mod test {
         let mut config = Config::new();
         config.csv_has_header = false;
         config.categorical_columns = vec![0];
-        config.max_cardinality = 8;
+        config.max_nbins = 8;
         let d = "1,1\n1,1\n2,1\n2,1\n3,2\n3,2\n4,2\n4,2\n5,3\n5,3\n6,3\n6,3\n7,4\n7,4\n8,4\n8,4\n\
                  9,5\n9,5\n10,5\n10,5\n11,6\n11,6\n12,6\n12,6\n13,7\n13,7\n14,7\n14,7\n15,8\n15,8\
                  \n16,8\n16,8";
         let data = Data::from_csv(&config, d).unwrap();
-
-        let target = data.get_feature(data.target_id());
-        let dataset = Dataset::construct_from_data(&config, &data, target);
+        let dataset = Dataset::construct_from_data(&config, &data, data.get_target());
 
         let ranges = &dataset.bitvecs[0];
         let values = vec![0b00000000000000000000000000001111u32,
@@ -607,13 +632,11 @@ mod test {
     fn dataset_num_aux(data_str: &str, values: &[u32]) {
         let mut config = Config::new();
         config.csv_has_header = false;
-        config.max_cardinality = 8;
+        config.max_nbins = 8;
         let data = Data::from_csv(&config, data_str).unwrap();
+        let dataset = Dataset::construct_from_data(&config, &data, data.get_target());
 
         dbg!(&data.features);
-
-        let target = data.get_feature(data.target_id());
-        let dataset = Dataset::construct_from_data(&config, &data, target);
 
         let ranges = &dataset.bitvecs[0];
         for (i, &r) in ranges.iter().enumerate() {
@@ -661,21 +684,26 @@ mod test {
         let mut config = Config::new();
         config.categorical_columns = vec![0, 1];
         config.csv_has_header = false;
-        config.max_cardinality = 8;
-        let d = "6,16,1,0.01\n4,19,2,0.02\n5,6,3,0.02\n0,4,4,0.03\n6,5,5,0.03\n4,4,6,0.04\n1,15,7,0.08\n2,16,8,0.09\n6,8,9,0.09\n4,14,10,0.09\n2,2,11,0.1\n5,11,12,0.13\n4,1,13,0.14\n0,9,14,0.18\n0,18,15,0.22\n3,12,16,0.22\n1,18,17,0.24\n0,8,18,0.27\n6,17,19,0.28\n3,14,20,0.28\n0,12,21,0.3\n7,16,22,0.32\n5,1,23,0.35\n0,13,24,0.36\n6,17,25,0.37\n3,10,26,0.37\n2,3,27,0.38\n6,9,28,0.4\n1,18,29,0.44\n5,7,30,0.45\n2,4,31,0.45\n7,5,32,0.49\n0,14,33,0.49\n2,19,34,0.49\n1,20,35,0.5\n4,3,36,0.53\n3,9,37,0.54\n7,20,38,0.6\n2,12,39,0.61\n6,11,40,0.62\n2,6,41,0.63\n0,8,42,0.65\n3,19,43,0.68\n4,13,44,0.7\n4,15,45,0.71\n5,2,46,0.74\n5,10,47,0.74\n7,3,48,0.75\n7,7,49,0.76\n7,15,50,0.76\n3,11,51,0.77\n5,2,52,0.8\n7,1,53,0.82\n2,7,54,0.84\n1,4,55,0.86\n6,13,56,0.88\n3,5,57,0.89\n3,20,58,0.92\n5,6,59,0.92\n1,1,60,0.94\n4,2,61,0.96\n7,17,62,0.99\n1,3,63,0.99\n1,10,64,0.99";
+        config.max_nbins = 8;
+        let d = "6,16,1,0.01\n4,19,2,0.02\n5,6,3,0.02\n0,4,4,0.03\n6,5,5,0.03\n4,4,6,0.04\n1,15,7,0.08\n2,16,8,0.09\n6,8,9,0.09\n4,14,10,0.09\n2,2,11,0.1\n5,11,12,0.13\n4,1,13,0.14\n0,9,14,0.18\n0,18,15,0.22\n3,12,16,0.22\n1,18,17,0.24\n0,8,18,0.27\n6,17,19,0.28\n3,14,20,0.28\n0,12,21,0.3\n6,16,22,0.32\n5,1,23,0.35\n0,13,24,0.36\n6,17,25,0.37\n3,10,26,0.37\n2,3,27,0.38\n6,9,28,0.4\n1,18,29,0.44\n5,7,30,0.45\n2,4,31,0.45\n6,5,32,0.49\n0,14,33,0.49\n2,19,34,0.49\n1,20,35,0.5\n4,3,36,0.53\n3,9,37,0.54\n6,20,38,0.6\n2,12,39,0.61\n6,11,40,0.62\n2,6,41,0.63\n0,8,42,0.65\n3,19,43,0.68\n4,13,44,0.7\n4,15,45,0.71\n5,2,46,0.74\n5,10,47,0.74\n6,3,48,0.75\n6,7,49,0.76\n6,15,50,0.76\n3,11,51,0.77\n5,2,52,0.8\n6,1,53,0.82\n2,7,54,0.84\n1,4,55,0.86\n6,13,56,0.88\n3,5,57,0.89\n3,20,58,0.92\n5,6,59,0.92\n1,1,60,0.94\n4,2,61,0.96\n6,17,62,0.99\n1,3,63,0.99\n1,10,64,0.99";
         let data = Data::from_csv(&config, d).unwrap();
-        let target = data.get_feature(data.target_id());
+        let dataset = Dataset::construct_from_data(&config, &data, data.get_target());
 
-        let dataset = Dataset::construct_from_data(&config, &data, target);
+        assert_eq!(dataset.get_nbins(0), 7);
+        assert_eq!(dataset.get_nbins(1), 8);
+        assert_eq!(dataset.get_nbins(2), 8);
+        assert_eq!(dataset.get_nbins(0), 7);
+        assert_eq!(dataset.get_nbins(1), 8);
+        assert_eq!(dataset.get_nbins(2), 8);
 
-        let values = vec![0b0000000000000000000000000000000000000000000000000000000000000000u64,
-                          0b0000000000000000000000100000000100000000100100100110000000001000,
-                          0b0000000010000000000000101000000100001001100101100110000100011001,
-                          0b0001000010000000000110101000100100001001100101100111001100111011,
-                          0b0001000010100000000110111100101101001101100101100111011110111011,
-                          0b0001010010101000011110111100101101101101110101100111111110111111,
-                          0b0001011110101100011111111101101101101111110111101111111110111111,
-                          0b1101111111101100011111111101111101111111110111111111111111111111,
+        let values = vec![0b0000000000000000000000100000000100000000100100100110000000001000,
+                          0b1100100001000000000000000000010000010000000000010000000001000000,
+                          0b0000000000100000000000010100001001000100000000000000010010000000,
+                          0b0000001100000100000001000001000000000010000010001000000000000000,
+                          0b0001000000000000000110000000100000000000000000000001001000100010,
+                          0b0000010000001000011000000000000000100000010000000000100000000100,
+                          0b0010000010010011100000001010000010001001001001000000000100010001,
+                          0b0, // skip
                           
                           0b0000000000000000000000000000000100000000001010000000001010000001,
                           0b0000000000000000000000100000000100010000001010110100001110000001,
@@ -693,7 +721,7 @@ mod test {
                           0b0000000000000000111111111111111111111111111111111111111111111111,
                           0b0000000000001111111111111111111111111111111111111111111111111111,
                           0b0000000011111111111111111111111111111111111111111111111111111111,
-                          0b0000111111111111111111111111111111111111111111111111111111111111];
+                          0b0000111111111111111111111111111111111111111111111111111111111111u64];
 
         for k in 0..3 {
             println!("== feature {}", k);
