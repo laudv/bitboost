@@ -5,14 +5,12 @@ use log::{debug, info};
 
 use crate::NumT;
 use crate::config::Config;
-use crate::dataset::{Dataset, FeatureType, NumFeatureInfo};
+use crate::data::{Dataset};
 use crate::tree::{Tree, SplitCrit};
 use crate::slice_store::{SliceRange, HistStore, BitBlockStore, BitVecRef};
 use crate::slice_store::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2};
 use crate::slice_store::{BitSliceLayout4, BitSliceLayout8};
 use crate::objective::Objective;
-use crate::numfeat_mask_store::NumFeatMaskStore;
-use crate::binner::Binner;
 
 // ------------------------------------------------------------------------------------------------
 
@@ -92,12 +90,7 @@ impl Node2Split {
 
 struct Split {
     split_crit: SplitCrit, // we use SplitCrit::NoSplit to indicate that no split is possible
-    fval_id: usize,
-
-    /// Slice range for BitVec containing feature value mask for numerical features (we can't just
-    /// fetch these from the dataset, the split values can change, there are way too many options
-    /// to generate them all in advance).
-    fval_mask_range: SliceRange,
+    fval_id: usize, // TODO rename this to split_id?
 }
 
 impl Split {
@@ -105,7 +98,6 @@ impl Split {
         Split {
             split_crit: SplitCrit::no_split(),
             fval_id: 0,
-            fval_mask_range: (0, 0),
         }
     }
 }
@@ -120,7 +112,7 @@ impl Split {
 /// Resources used by the tree learner that can be reused.
 pub struct TreeLearnerContext<'a> {
     config: &'a Config,
-    dataset: &'a Dataset,
+    dataset: &'a Dataset<'a>,
 
     hist_store: HistStore<HistVal>,
     idx_store: BitBlockStore,
@@ -130,17 +122,18 @@ pub struct TreeLearnerContext<'a> {
     n2s_stack: Vec<Node2Split>,
     example_buffer: Vec<usize>,
     grad_discr: Vec<NumT>, // same values as in root bitslice (discretized gradients)
-
-    numfeat_mask_store: NumFeatMaskStore,
 }
 
 impl <'a> TreeLearnerContext<'a> {
-    pub fn new(config: &'a Config, dataset: &'a Dataset) -> Self {
+    pub fn new(config: &'a Config, dataset: &'a Dataset<'a>) -> Self {
+        let nbins_iter = (0..dataset.nfeatures())
+            .map(|feat_id| dataset.get_nbins(feat_id) as u32);
+
         TreeLearnerContext {
             config,
             dataset,
 
-            hist_store: HistStore::for_dataset(dataset),
+            hist_store: HistStore::new(nbins_iter),
             idx_store: BitBlockStore::new(4096),
             mask_store: BitBlockStore::new(4096),
             grad_store: BitBlockStore::new(4096 * config.discr_nbits),
@@ -148,8 +141,6 @@ impl <'a> TreeLearnerContext<'a> {
             n2s_stack: Vec::new(),
             example_buffer: Vec::new(), // used for leaf value predictions
             grad_discr: Vec::new(),
-
-            numfeat_mask_store: NumFeatMaskStore::new(4096),
         }
     }
 
@@ -160,7 +151,6 @@ impl <'a> TreeLearnerContext<'a> {
         self.grad_store.reset();
         self.n2s_stack.clear();
         self.grad_discr.clear();
-        self.numfeat_mask_store.reset();
     }
 }
 
@@ -186,23 +176,6 @@ macro_rules! dispatch {
     }}
 }
 
-/// We use a macro to avoid having an immutable borrow of TreeLearner simply because we have a
-/// immutable borrow of self.ctx.numfeat_mask_store. Difficult to have helper functions that return
-/// references in Rust -> often results in immutable reference to self, which disables any calls to
-/// mutable member functions, even if the actual reference concerns one field which is unaffected
-/// by the mutable member function.
-macro_rules! get_fval_mask {
-    ($self:expr, $feature:expr, $split:expr) => {{
-        match $feature.get_feature_type() {
-            FeatureType::Uninitialized => panic!("uninitialized split"),
-            FeatureType::NomCat(bitvecs) => bitvecs.get_bitvec($split.fval_id),
-            FeatureType::OrdCat(bitvecs) => bitvecs.get_bitvec($split.fval_id),
-            FeatureType::OrdNum(_) => {
-                $self.ctx.numfeat_mask_store.get_fval_mask($split.fval_mask_range)
-            }
-        }
-    }}
-}
 
 
 
@@ -262,10 +235,6 @@ where 'a: 'b {
 
             self.ctx.hist_store.free_hists(n2s.hists_range);
             self.ctx.mask_store.free_blocks(n2s.mask_range);
-
-            if split.fval_mask_range.1 != 0 {
-                self.ctx.numfeat_mask_store.free_fval_mask(split.fval_mask_range);
-            }
         }
         
         assert!(self.tree.nnodes() > 1);
@@ -284,46 +253,46 @@ where 'a: 'b {
         for feat_id in 0..self.ctx.dataset.nfeatures() {
             let hist = self.ctx.hist_store.get_hist(n2s.hists_range, feat_id);
 
-            for fval_id in 0..hist.len() {
-                let histval = hist[fval_id];
-                let (lgrad, lcount) = histval.unpack();
-                let (rgrad, rcount) = (pgrad - lgrad, pcount - lcount);
+            //for fval_id in 0..hist.len() {
+            //    let histval = hist[fval_id];
+            //    let (lgrad, lcount) = histval.unpack();
+            //    let (rgrad, rcount) = (pgrad - lgrad, pcount - lcount);
 
-                if lcount < min_examples || rcount < min_examples { continue; }
+            //    if lcount < min_examples || rcount < min_examples { continue; }
 
-                let lloss = self.get_loss(lgrad, lcount);
-                let rloss = self.get_loss(rgrad, rcount);
-                let gain = ploss - lloss - rloss;
+            //    let lloss = self.get_loss(lgrad, lcount);
+            //    let rloss = self.get_loss(rgrad, rcount);
+            //    let gain = ploss - lloss - rloss;
 
-                if gain > best_gain {
-                    use FeatureType::*;
-                    let feat = self.ctx.dataset.get_feature(feat_id);
+            //    if gain > best_gain {
+            //        use FeatureType::*;
+            //        let feat = self.ctx.dataset.get_feature(feat_id);
 
-                    //println!("N{:03}-F{:02} possible split gain={}",
-                    //       n2s.node_id, feat_id, gain);
+            //        //println!("N{:03}-F{:02} possible split gain={}",
+            //        //       n2s.node_id, feat_id, gain);
 
-                    match feat.get_feature_type() {
-                        Uninitialized => panic!("uninitialized feature"),
-                        NomCat(bitvecs) => {
-                            let split_val = bitvecs.get_value(fval_id);
-                            best_split.split_crit = SplitCrit::cat_eq(feat_id, split_val)
-                        },
-                        OrdCat(bitvecs) => {
-                            let split_val = bitvecs.get_value(fval_id);
-                            best_split.split_crit = SplitCrit::cat_lt(feat_id, split_val)
-                        },
-                        OrdNum(info) => {
-                            let split_val = info.get_value(fval_id);
-                            let range = self.ctx.numfeat_mask_store.gen_fval_mask(feat, split_val);
-                            best_split.fval_mask_range = range;
-                            best_split.split_crit = SplitCrit::num_lt(feat_id, split_val)
-                        },
-                    }
+            //        match feat.get_feature_type() {
+            //            Uninitialized => panic!("uninitialized feature"),
+            //            NomCat(bitvecs) => {
+            //                let split_val = bitvecs.get_value(fval_id);
+            //                best_split.split_crit = SplitCrit::cat_eq(feat_id, split_val)
+            //            },
+            //            OrdCat(bitvecs) => {
+            //                let split_val = bitvecs.get_value(fval_id);
+            //                best_split.split_crit = SplitCrit::cat_lt(feat_id, split_val)
+            //            },
+            //            OrdNum(info) => {
+            //                let split_val = info.get_value(fval_id);
+            //                let range = self.ctx.numfeat_mask_store.gen_fval_mask(feat, split_val);
+            //                best_split.fval_mask_range = range;
+            //                best_split.split_crit = SplitCrit::num_lt(feat_id, split_val)
+            //            },
+            //        }
 
-                    best_gain = gain;
-                    best_split.fval_id = fval_id;
-                }
-            }
+            //        best_gain = gain;
+            //        best_split.fval_id = fval_id;
+            //    }
+            //}
         }
         best_split
     }
@@ -361,8 +330,8 @@ where 'a: 'b {
                          split: &Split, f: F) -> Node2Split
     where F: Fn(u32) -> u32
     {
-        let feature = self.ctx.dataset.get_feature(split.split_crit.feature_id);
-        let fval_mask = get_fval_mask!(self, feature, split);
+        let feat_id = split.split_crit.feature_id;
+        let fval_mask = self.ctx.dataset.get_bitvec(feat_id, split.fval_id);
         let parent_indices = self.ctx.idx_store.get_bitvec(parent_n2s.idx_range);
         let nblocks = parent_indices.len();
         let n_u32 = parent_indices.block_len::<u32>();
@@ -419,41 +388,6 @@ where 'a: 'b {
                                            right_n2s.hists_range);
     }
 
-    fn fill_histogram_num(&mut self, n2s: &Node2Split, feat_id: usize, info: &NumFeatureInfo) {
-        let feature = self.ctx.dataset.get_feature(feat_id);
-        let limits = info.get_limits();
-        let fval = feature.get_raw_data();
-        let grad = &self.ctx.grad_discr;
-        let mask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
-        let hist = self.ctx.hist_store.get_hist_mut(n2s.hists_range, feat_id);
-        let mut binner = Binner::new(hist, limits, |hv1: &mut HistVal, hv2: HistVal| {
-            hv1.example_count += hv2.example_count;
-            hv1.grad_sum += hv2.grad_sum;
-        });
-
-        if n2s.compressed {
-            let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
-            let examples = mask.index_iter_compr(&idxs);
-            for i in examples {
-                let grad_sum = grad[i];
-                let example_count = 1;
-                let histval = HistVal { grad_sum, example_count };
-                binner.insert(fval[i], histval);
-            }
-        } else {
-            let examples = mask.index_iter();
-            for i in examples {
-                let grad_sum = grad[i];
-                let example_count = 1;
-                let histval = HistVal { grad_sum, example_count };
-                binner.insert(fval[i], histval);
-            }
-        }
-
-        // There are ordered splits, so we cumulate
-        self.ctx.hist_store.hist_cumsum(n2s.hists_range, feat_id);
-    }
-
     fn get_loss(&self, grad_sum: NumT, example_count: u32) -> NumT {
         let lambda = self.ctx.config.reg_lambda;
         -0.5 * ((grad_sum * grad_sum) / (example_count as NumT + lambda))
@@ -467,7 +401,7 @@ where 'a: 'b {
     //}
 
     fn predict_leaf_value(&mut self, n2s: &Node2Split) {
-        let targets = self.ctx.dataset.target().get_raw_data();
+        let targets = self.ctx.dataset.get_target();
         let mask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
         let examples = &mut self.ctx.example_buffer;
         examples.clear();
@@ -486,13 +420,13 @@ where 'a: 'b {
     }
 
     fn predict_child_leaf_values(&mut self, n2s: &Node2Split, split: &Split) {
-        let feature = self.ctx.dataset.get_feature(split.split_crit.feature_id);
+        let feat_id = split.split_crit.feature_id;
         let left_value;
         let right_value;
 
-        let targets = self.ctx.dataset.target().get_raw_data();
+        let targets = self.ctx.dataset.get_target();
         let pmask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
-        let fmask = get_fval_mask!(self, feature, split);
+        let fmask = self.ctx.dataset.get_bitvec(feat_id, split.fval_id);
         let examples = &mut self.ctx.example_buffer;
 
         examples.clear();
@@ -534,49 +468,50 @@ where 'a: 'b {
 
     fn debug_print_bsl<BSL>(&self, n2s: &Node2Split, split: &Split) -> bool
     where BSL: BitSliceLayout {
-        let nid = n2s.node_id;
-        let feat_id = split.split_crit.feature_id;
-        let split_val = split.split_crit.split_value;
-        let fval_id = split.fval_id;
-        let feature = self.ctx.dataset.get_feature(feat_id);
-        let hist = self.ctx.hist_store.get_hist(n2s.hists_range, feat_id);
-        let (pgrad, pcount) = (n2s.grad_sum, n2s.example_count);
-        let (lgrad, lcount) = hist[fval_id].unpack();
-        let (rgrad, rcount) = (pgrad - lgrad, pcount - lcount);
-        let gain = self.get_loss(pgrad, pcount)
-            - self.get_loss(lgrad, lcount)
-            - self.get_loss(rgrad, rcount);
+        // TODO rewrite
+        //let nid = n2s.node_id;
+        //let feat_id = split.split_crit.feature_id;
+        //let split_val = split.split_crit.split_value;
+        //let fval_id = split.fval_id;
+        //let feature = self.ctx.dataset.get_feature(feat_id);
+        //let hist = self.ctx.hist_store.get_hist(n2s.hists_range, feat_id);
+        //let (pgrad, pcount) = (n2s.grad_sum, n2s.example_count);
+        //let (lgrad, lcount) = hist[fval_id].unpack();
+        //let (rgrad, rcount) = (pgrad - lgrad, pcount - lcount);
+        //let gain = self.get_loss(pgrad, pcount)
+        //    - self.get_loss(lgrad, lcount)
+        //    - self.get_loss(rgrad, rcount);
 
-        let pidxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
-        let pmask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
-        let mut debug_num_masks = NumFeatMaskStore::new(128);
-        let (op, fval_mask) = match feature.get_feature_type() {
-            FeatureType::NomCat(bitsets) => {
-                ("=", bitsets.get_bitvec(fval_id))
-            },
-            _ => {
-                let r = debug_num_masks.gen_fval_mask(feature, split_val);
-                let bitset = debug_num_masks.get_fval_mask(r);
-                ("<", bitset)
-            }
-        };
+        //let pidxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
+        //let pmask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
+        //let mut debug_num_masks = NumFeatMaskStore::new(128);
+        //let (op, fval_mask) = match feature.get_feature_type() {
+        //    FeatureType::NomCat(bitsets) => {
+        //        ("=", bitsets.get_bitvec(fval_id))
+        //    },
+        //    _ => {
+        //        let r = debug_num_masks.gen_fval_mask(feature, split_val);
+        //        let bitset = debug_num_masks.get_fval_mask(r);
+        //        ("<", bitset)
+        //    }
+        //};
 
-        debug!("N{:03}-F{:02} {} {:.3} [fval_id={:<2}] gain={}; counts: {} -> {}, {}", nid,
-               feat_id, op, split_val, fval_id, gain, pcount, lcount, rcount);
+        //debug!("N{:03}-F{:02} {} {:.3} [fval_id={:<2}] gain={}; counts: {} -> {}, {}", nid,
+        //       feat_id, op, split_val, fval_id, gain, pcount, lcount, rcount);
 
-        println!(" SPLIT N{:03} -> N{:03}, N{:03}:", nid, self.tree.left_child(nid),
-                 self.tree.right_child(nid));
-        println!("   {:>4}  {:>15} {:>15} {:>15} {:>15} {:>15}", "ex", "grad", "grad.discr", "colval",
-                 "target", "cur.pred");
+        //println!(" SPLIT N{:03} -> N{:03}, N{:03}:", nid, self.tree.left_child(nid),
+        //         self.tree.right_child(nid));
+        //println!("   {:>4}  {:>15} {:>15} {:>15} {:>15} {:>15}", "ex", "grad", "grad.discr", "colval",
+        //         "target", "cur.pred");
 
-        let pr = |i: usize, lr: &str| {
-            println!(" - {:4}: {:15} {:15} {:15} {:15} {:>15} {:>5}", i, self.objective.gradients()[i],
-            self.ctx.grad_discr[i], feature.get_raw_data()[i],
-            self.ctx.dataset.target().get_raw_data()[i], self.objective.predictions()[i], lr);
-        };
+        //let pr = |i: usize, lr: &str| {
+        //    println!(" - {:4}: {:15} {:15} {:15} {:15} {:>15} {:>5}", i, self.objective.gradients()[i],
+        //    self.ctx.grad_discr[i], feature.get_raw_data()[i],
+        //    self.ctx.dataset.target().get_raw_data()[i], self.objective.predictions()[i], lr);
+        //};
 
-        for i in pmask.index_iter_and_compr(&fval_mask, &pidxs) { pr(i, "L") } println!();
-        for i in pmask.index_iter_andnot_compr(&fval_mask, &pidxs) { pr(i, "R") }
+        //for i in pmask.index_iter_and_compr(&fval_mask, &pidxs) { pr(i, "L") } println!();
+        //for i in pmask.index_iter_andnot_compr(&fval_mask, &pidxs) { pr(i, "R") }
 
         true
     }
@@ -697,30 +632,31 @@ macro_rules! build_histograms {
         fn $f(this: &mut TreeLearner, n2s: &Node2Split) {
             get_grad_sum!(get_grad_sum, $bsl, $sum_method);
 
-            for feature in this.ctx.dataset.features() {
-                let feat_id = feature.id();
+            // TODO rewrite
+            //for feature in this.ctx.dataset.features() {
+            //    let feat_id = feature.id();
 
-                match feature.get_feature_type() {
-                    FeatureType::Uninitialized => panic!("uninitialized feature"),
+            //    match feature.get_feature_type() {
+            //        FeatureType::Uninitialized => panic!("uninitialized feature"),
 
-                    // bucket for each categorical feature value
-                    FeatureType::NomCat(ref bitvecs) | FeatureType::OrdCat(ref bitvecs) => {
-                        let nbins = bitvecs.get_nbins();
-                        for fval_id in 0..nbins {
-                            let fval_mask = bitvecs.get_bitvec(fval_id);
-                            let (grad_sum, example_count) = get_grad_sum(this, n2s, &fval_mask);
-                            let histval = HistVal { grad_sum, example_count };
-                            let hist = this.ctx.hist_store.get_hist_mut(n2s.hists_range, feat_id);
-                            hist[fval_id] = histval;
-                        }
-                    }
+            //        // bucket for each categorical feature value
+            //        FeatureType::NomCat(ref bitvecs) | FeatureType::OrdCat(ref bitvecs) => {
+            //            let nbins = bitvecs.get_nbins();
+            //            for fval_id in 0..nbins {
+            //                let fval_mask = bitvecs.get_bitvec(fval_id);
+            //                let (grad_sum, example_count) = get_grad_sum(this, n2s, &fval_mask);
+            //                let histval = HistVal { grad_sum, example_count };
+            //                let hist = this.ctx.hist_store.get_hist_mut(n2s.hists_range, feat_id);
+            //                hist[fval_id] = histval;
+            //            }
+            //        }
 
-                    // bucket for each split proposed by the splitter
-                    FeatureType::OrdNum(ref info) => {
-                        this.fill_histogram_num(n2s, feat_id, info);
-                    }
-                }
-            }
+            //        // bucket for each split proposed by the splitter
+            //        FeatureType::OrdNum(ref info) => {
+            //            this.fill_histogram_num(n2s, feat_id, info);
+            //        }
+            //    }
+            //}
         }
     }
 }

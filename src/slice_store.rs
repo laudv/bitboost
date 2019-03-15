@@ -13,7 +13,6 @@ use log::{warn, info};
 
 use crate::NumT;
 use crate::bitblock::{BitBlock, get_bit, set_bit, get_bitpos, get_blockpos};
-use crate::dataset::Dataset;
 use crate::simd;
 
 pub type SliceRange = (u32, u32); // TODO change to struct SliceRange(u32, u32), impl is_null_range()
@@ -243,12 +242,6 @@ where T: Clone + Default {
             slice_store: SliceStore::new(8192),
             hist_layout: hist_layout,
         }
-    }
-
-    pub fn for_dataset(dataset: &Dataset) -> Self {
-        // Use the right amount of 'buckets' for each feature
-        // Currently only categorical features; one bucket for each cat. feat. value.
-        Self::new(dataset.features().iter().map(|f| f.get_nbins() as u32 ))
     }
 
     fn get_histogram_range(&self, feat_id: usize) -> (usize, usize) {

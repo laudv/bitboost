@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 use crate::NumT;
-use crate::dataset::{Dataset, Feature, FeatureType};
+use crate::data::Dataset;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SplitType {
@@ -132,7 +132,7 @@ impl Tree {
             let split_crit = &self.split_crits[node_id];
             let feat_id = split_crit.feature_id;
             let split_value = split_crit.split_value;
-            let value = dataset.get_value(feat_id, i);
+            let value = dataset.get_feature(feat_id)[i];
 
             match split_crit.split_type {
                 SplitType::CatEq => {
@@ -165,7 +165,6 @@ impl Tree {
     /// Predict and store the result as defined by `f` in `predict_buf`.
     pub fn predict_and<F>(&self, dataset: &Dataset, predict_buf: &mut [NumT], f: F)
     where F: Fn(NumT, &mut NumT) {
-        let targets = dataset.target().get_raw_data();
         assert_eq!(predict_buf.len(), dataset.nexamples());
         for i in 0..dataset.nexamples() {
             let leaf_id = self.predict_leaf_id_of_example(dataset, i);
