@@ -4,7 +4,7 @@ use log::{debug, info};
 
 use crate::NumT;
 use crate::config::Config;
-use crate::dataset::Dataset;
+use crate::data::{Data, Dataset};
 use crate::tree::{AdditiveTree};
 use crate::tree_learner::{TreeLearnerContext, TreeLearner};
 use crate::objective::{Objective, objective_from_name};
@@ -12,7 +12,7 @@ use crate::metric::Metric;
 
 pub struct Booster<'a> {
     config: &'a Config,
-    dataset: &'a Dataset,
+    dataset: Dataset<'a>,
     objective: Box<dyn Objective>,
     iter_count: usize, 
     metrics: &'a [Box<dyn Metric>],
@@ -20,29 +20,30 @@ pub struct Booster<'a> {
 }
 
 impl <'a> Booster<'a> {
-    pub fn new(config: &'a Config, dataset: &'a Dataset, metrics: &'a [Box<dyn Metric>])
-        -> Booster<'a>
+    pub fn new(config: &'a Config, data: &'a Data, metrics: &'a [Box<dyn Metric>])
+        -> Option<Booster<'a>>
     {
-        let objective = objective_from_name(&config.objective, config);
+        let objective = objective_from_name(&config.objective, config)?;
         let ensemble = AdditiveTree::new();
+        let dataset = Dataset::construct_from_data(&config, data, objective.gradients());
 
-        Booster {
+        Some(Booster {
             config,
             dataset,
             objective,
             iter_count: 0,
             metrics,
             ensemble,
-        }
+        })
     }
 
     pub fn train(mut self) -> AdditiveTree {
         assert!(self.iter_count == 0);
         let start = Instant::now();
-        let targets = self.dataset.target().get_raw_data();
-        let mut r = TreeLearnerContext::new(self.config, self.dataset);
+        let target = self.dataset.get_target();
+        let mut r = TreeLearnerContext::new(self.config, &self.dataset);
 
-        self.objective.initialize(self.config, targets);
+        self.objective.initialize(self.config, target);
         self.ensemble.set_bias(self.objective.bias());
 
         for _ in 0..self.config.niterations {
@@ -57,9 +58,9 @@ impl <'a> Booster<'a> {
     }
 
     fn train_one_iter(&mut self, ctx: &mut TreeLearnerContext) {
-        let targets = self.dataset.target().get_raw_data();
+        let target = self.dataset.get_target();
         self.iter_count += 1;
-        self.objective.update(targets);
+        self.objective.update(target);
 
         let tree = {
             let learner = TreeLearner::new(ctx, self.objective.as_mut());
@@ -84,10 +85,9 @@ impl <'a> Booster<'a> {
         // shrinkage is automatically applied by objective!
         self.ensemble.push_tree(tree);
 
-
         if !self.metrics.is_empty() {
             for m in self.metrics {
-                let eval = m.eval(&targets, self.objective.predictions());
+                let eval = m.eval(&target, self.objective.predictions());
                 info!(" |   eval {:<15}: {:e}", m.name(), eval);
             }
         }

@@ -1,20 +1,14 @@
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
-use crate::NumT;
+use crate::{NumT, into_cat};
 use crate::data::Dataset;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SplitType {
     /// No split, this node is a leaf.
     NoSplit,
-
-    /// Categorical equality split: equal goes left, neq goes right
-    CatEq,
-
-    /// Categorical ordered split: lt goes left, gteq goes right
-    CatLt,
-
-    /// Numerical ordered split: lt goes left, qteg goes right
+    LoCardCatEq,
+    HiCardCatLt,
     NumLt,
 }
 
@@ -31,30 +25,6 @@ impl SplitCrit {
             split_type: SplitType::NoSplit,
             feature_id: 0,
             split_value: 0.0,
-        }
-    }
-
-    pub fn cat_eq(feature_id: usize, split_value: NumT) -> SplitCrit {
-        SplitCrit {
-            split_type: SplitType::CatEq,
-            feature_id,
-            split_value,
-        }
-    }
-
-    pub fn cat_lt(feature_id: usize, split_value: NumT) -> SplitCrit {
-        SplitCrit {
-            split_type: SplitType::CatLt,
-            feature_id,
-            split_value,
-        }
-    }
-
-    pub fn num_lt(feature_id: usize, split_value: NumT) -> SplitCrit {
-        SplitCrit {
-            split_type: SplitType::NumLt,
-            feature_id,
-            split_value,
         }
     }
 
@@ -135,13 +105,15 @@ impl Tree {
             let value = dataset.get_feature(feat_id)[i];
 
             match split_crit.split_type {
-                SplitType::CatEq => {
+                SplitType::LoCardCatEq => {
                     node_id = if value == split_value { self.left_child(node_id) }
                               else                    { self.right_child(node_id) }
                 },
-                SplitType::CatLt => {
-                    node_id = if value < split_value { self.left_child(node_id) }
-                              else                   { self.right_child(node_id) }
+                SplitType::HiCardCatLt => {
+                    let spcat = dataset.get_super_category(feat_id, value);
+                    let split_value = into_cat(split_value);
+                    node_id = if spcat <= split_value { self.left_child(node_id) }
+                              else                    { self.right_child(node_id) }
                 },
                 SplitType::NumLt => {
                     node_id = if value < split_value { self.left_child(node_id) }

@@ -1,73 +1,129 @@
+use std::str::FromStr;
 use crate::NumT;
 
-pub struct Config {
+#[allow(unused_macros)]
+macro_rules! parse_config {
+    ($cname:ident, $($x:ident: $t:ty = $d:expr, $parser:ident;)*) => {
+        #[derive(Debug)]
+        pub struct $cname {
+            $( pub $x: $t, )*
+        }
 
-    // Dataset
-    pub target_feature: isize,
+        impl $cname {
+            pub fn new() -> $cname {
+                $cname {
+                    $( $x: $d, )*
+                }
+            }
 
-    pub csv_has_header: bool,
-    pub csv_separator: char, // TODO remove
-    pub csv_delimiter: u8,
+            #[allow(dead_code)]
+            pub fn parse<'a, I>(input: I) -> Result<$cname, String>
+            where I: 'a + Iterator<Item = &'a str>{
+                let mut config = Self::new();
 
-    pub categorical_columns: Vec<usize>,
-    pub max_nbins: usize,
+                for line in input {
+                    let (name, value) = {
+                        let mut iter = line.split('=');
+                        let name = iter.next().ok_or(format!("invalid config line: {}", line))?;
+                        let value = iter.next().ok_or(format!("invalid config line: {}", line))?;
+                        (name.trim(), value.trim())
+                    };
 
-    pub objective: String,
+                    match name {
+                        $( stringify!($x) => {
+                            config.$x = $parser(value)
+                                .ok_or(format!("config: expected value of type `{}` in line `{}`",
+                                               stringify!($t), line))?;
+                        },)*
+                        _ => { return Err(format!("unknown config value: {}", name)); }
+                    }
+                }
 
-    // Tree
-    pub max_tree_depth: usize,
-    pub reg_lambda: NumT,
-    pub min_examples_leaf: u32,
-    pub min_gain: NumT,
-    pub nsplits_cands: usize,
-    pub huber_alpha: NumT,
-    
-    pub discr_nbits: usize,
-
-    /// A threshold for the ratio #zero-block / #blocks; if ratio > threshold, then apply
-    /// compression. Disable by setting to 1.0 or higher.
-    pub compression_threshold: NumT,
-
-    pub random_seed: u64,
-    pub feature_fraction: NumT,
-    pub example_fraction: NumT,
-
-    // Boosting
-    pub learning_rate: NumT,
-    pub niterations: usize,
+                Ok(config)
+            }
+        }
+    }
 }
 
-impl Config {
-    pub fn new() -> Config {
-        Config {
-            target_feature: -1,
-
-            csv_has_header: true,
-            csv_separator: ',',
-            csv_delimiter: b',',
-
-            categorical_columns: Vec::new(),
-            max_nbins: 16,
-
-            objective: String::from("L2"),
-
-            max_tree_depth: 4,
-            reg_lambda: 0.0,
-            min_examples_leaf: 1,
-            min_gain: 0.0,
-            nsplits_cands: 16,
-            huber_alpha: 0.9,
-
-            discr_nbits: 4,
-
-            compression_threshold: 0.5,
-
-            random_seed: 1,
-            feature_fraction: 1.0,
-            example_fraction: 1.0,
-
-            learning_rate: 0.1,
-            niterations: 100,
+fn parse_fromstr<T: FromStr>(value: &str) -> Option<T> { value.parse::<T>().ok() }
+fn parse_vec<T: FromStr>(value: &str) -> Option<Vec<T>> {
+    let mut res = Vec::new();
+    for v in value.split(',').map(|s| s.trim()) {
+        match v.parse::<T>() {
+           Ok(x)  => res.push(x),
+           Err(_) => return None,
         }
+    }
+    Some(res)
+}
+
+
+
+
+
+
+
+
+// ------------------------------------------------------------------------------------------------
+
+parse_config!(Config,
+    train: String = String::new(),                  parse_fromstr;
+    test: String = String::new(),                   parse_fromstr;
+    objective: String = String::from("L2"),         parse_fromstr;
+
+    target_feature: isize = -1,                     parse_fromstr;
+
+    csv_has_header: bool = true,                    parse_fromstr;
+    csv_delimiter: u8 = b',',                       parse_fromstr;
+
+    categorical_features: Vec<usize> = vec![],      parse_vec;
+
+    niterations: usize = 100,                       parse_fromstr;
+    learning_rate: NumT = 1.0,                      parse_fromstr;
+    reg_lambda: NumT = 0.0,                         parse_fromstr;
+    min_examples_leaf: u32 = 1,                     parse_fromstr;
+    min_gain: NumT = 0.0,                           parse_fromstr;
+    huber_alpha: NumT = 0.0,                        parse_fromstr;
+
+    max_nbins: usize = 16,                          parse_fromstr;
+    discr_nbits: usize = 4,                         parse_fromstr;
+    max_tree_depth: usize = 6,                      parse_fromstr;
+    compression_threshold: NumT = 0.5,              parse_fromstr;
+
+    random_seed: u64 = 1,                           parse_fromstr;
+    feature_fraction: NumT = 1.0,                   parse_fromstr;
+    example_fraction: NumT = 1.0,                   parse_fromstr;
+);
+
+
+
+
+
+
+
+
+// ------------------------------------------------------------------------------------------------
+
+mod test {
+    use super::*;
+
+    parse_config!(Config2,
+        a: i32 = -30,  parse_fromstr;
+        b: u32 = 2,    parse_fromstr;
+        c: Vec<isize> = vec![], parse_vec;
+    );
+
+    #[test]
+    fn test() {
+        let c = Config2::new();
+        assert_eq!(c.a, -30);
+        assert_eq!(c.b, 2);
+        assert_eq!(&c.c, &[]);
+
+        let args = ["a=12", "b =  13", "c=1,   -2, 3"];
+        let c = Config2::parse(args.iter().map(|&s| s)).unwrap();
+        assert_eq!(c.a, 12);
+        assert_eq!(c.b, 13);
+        assert_eq!(&c.c, &[1,-2,3]);
     }
 }

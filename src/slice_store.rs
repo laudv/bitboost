@@ -3,13 +3,13 @@ use std::borrow::{Borrow, BorrowMut};
 use std::fmt::Debug;
 use std::mem::{size_of, align_of};
 use std::ptr;
-use std::ops::{Add, Sub, Deref, DerefMut};
+use std::ops::{Sub, Deref, DerefMut};
 use std::slice;
 use std::marker::PhantomData;
 
 use fnv::FnvHashMap as HashMap;
 use num::{Integer, PrimInt};
-use log::{warn, info};
+use log::warn;
 
 use crate::NumT;
 use crate::bitblock::{BitBlock, get_bit, set_bit, get_bitpos, get_blockpos};
@@ -275,14 +275,6 @@ where T: Clone + Default {
             let parent = buffer[(plo+i) as usize].clone();
             let left   = buffer[(llo+i) as usize].clone();
             buffer[(rlo+i) as usize] = parent - left;
-        }
-    }
-
-    pub fn hist_cumsum(&mut self, range: SliceRange, feat_id: usize)
-    where T: Add<Output=T> {
-        let hist = self.get_hist_mut(range, feat_id);
-        for i in 1..hist.len() {
-            hist[i] = hist[i-1].clone() + hist[i].clone();
         }
     }
 

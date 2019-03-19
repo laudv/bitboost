@@ -1,6 +1,6 @@
 use log::info;
 
-use crate::{NumT, EPSILON};
+use crate::{NumT};
 use crate::config::Config;
 use crate::binner::Binner;
 
@@ -34,13 +34,13 @@ pub trait Objective {
     fn predict_leaf_value(&mut self, targets: &[NumT], examples: &[usize]) -> NumT;
 }
 
-pub fn objective_from_name(name: &str, config: &Config) -> Box<dyn Objective> {
+pub fn objective_from_name(name: &str, _config: &Config) -> Option<Box<dyn Objective>> {
     match name.to_lowercase().as_str() {
-        "l2"     => Box::new(L2::new()),
-        "l1"     => Box::new(L1::new()),
+        "l2"     => Some(Box::new(L2::new())),
+        "l1"     => Some(Box::new(L1::new())),
 //        "Huber"   => Box::new(Huber::new(config.huber_alpha)),
-        "binary" => Box::new(Binary::new()),
-        _        => panic!("Unknown objective: {}", name),
+        "binary" => Some(Box::new(Binary::new())),
+        _        => None,
     }
 }
 
@@ -103,7 +103,7 @@ macro_rules! objective_struct {
     }
 }
 
-macro_rules! median_values {
+macro_rules! median_value {
     (targets: $self:ident, $targets:ident, $i:ident) => {{
         $targets[$i]
     }};
@@ -119,14 +119,16 @@ macro_rules! median {
 
         bins.iter_mut().for_each(|x| *x = 0);
 
-        let mut binner = Binner::new(bins, limits, |x, y| *x += y);
+        let mut binner = Binner::new(bins, limits);
+        let mut count = 0;
         for i in $irange {
-            let value = median_values!($values: $self, $targets, i);
-            binner.insert(value, 1);
+            let value = median_value!($values: $self, $targets, i);
+            count += 1;
+            binner.insert(value, 1, |x, y| *x += y);
         }
 
-        let rank = binner.count() / 2;
-        let (bin, _rank_lo, _rank_hi) = binner.bin_with_rank::<u32, _>(rank, |&x| x);
+        let rank = count / 2;
+        let bin = binner.bin_with_rank(rank, |&x| x);
         binner.bin_representative(bin)
     }}
 }

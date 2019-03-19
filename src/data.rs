@@ -6,13 +6,13 @@ use std::cmp::Ordering;
 
 use csv;
 
-use crate::{NumT, POS_INF, NEG_INF, into_cat, EPSILON};
+use crate::{NumT, CatT, POS_INF, NEG_INF, into_cat, EPSILON};
 use crate::config::Config;
 use crate::slice_store::{SliceRange, BitBlockStore, BitVecRef};
-use crate::new_binner::Binner;
+use crate::binner::Binner;
 use crate::simd;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeatType {
     LoCardCat,
     HiCardCat,
@@ -67,7 +67,7 @@ impl Data {
                         features.resize(record_len, Vec::new());
                         limits.resize(record_len, (POS_INF, NEG_INF));
                         ftypes.resize(record_len, FeatType::Numerical);
-                        config.categorical_columns.iter()
+                        config.categorical_features.iter()
                             .for_each(|&c| if c<record_len { ftypes[c] = FeatType::LoCardCat; });
                         cards.resize(record_len, 0);
                     }
@@ -168,7 +168,7 @@ pub struct Dataset<'a> {
 
     /// For high cardinality categorical features, a list of hashsets is maintained containing all
     /// possible values per split (for an IN-SPLIT). For other features, this list is empty.
-    super_categories: Vec<Rc<Vec<usize>>>,
+    super_categories: Vec<Rc<Vec<CatT>>>,
 
     /// For numerical features, store list of possible split values.
     split_values: Vec<Vec<NumT>>,
@@ -299,9 +299,7 @@ impl <'a> Dataset<'a> {
         // extract approximate quantiles from bins
         let extractor = |bin: &u32| *bin;
         let rank_step = n as NumT / (self.max_nbins + 1) as NumT;
-        let ranks = (1..=self.max_nbins).map(|i| {
-            (i as NumT * rank_step).round() as u32 - 1
-        });
+        let ranks = (1..=self.max_nbins).map(|i| (i as NumT * rank_step).round() as u32 - 1);
         let qbins = binner.rank_iter(ranks, extractor);
         let mut last_bin = usize::max_value();
         let mut split_weights = Vec::with_capacity(self.max_nbins);
@@ -314,13 +312,13 @@ impl <'a> Dataset<'a> {
         debug_assert!(super_card <= self.max_nbins);
 
         // generate mapping: category -> super category
-        let mut super_categories = vec![0usize; card];
+        let mut super_categories = vec![0; card];
         for (category, &(mean, _))  in grad_stat_pairs.iter().enumerate() {
             let super_category = split_weights.binary_search_by(|&x| {
                 if x < mean { Ordering::Less }
                 else { Ordering::Greater }
             }).expect_err("in this universe, nothing is equal (see cmp impl above)");
-            super_categories[category] = super_category;
+            super_categories[category] = super_category as CatT;
             println!("category {:?} -> {:?} [mean {} < {:?}]", category, super_category, mean,
                      split_weights.get(super_category));
         }
@@ -330,7 +328,7 @@ impl <'a> Dataset<'a> {
 
         // generate bitvecs
         let iter = self.example_sel.iter().map(|&i| data[i]);
-        let numt2cat = |x| super_categories[into_cat(x) as usize];
+        let numt2cat = |x| super_categories[into_cat(x) as usize] as usize;
         let bitvecs = construct_bitvecs(&mut self.store, n, super_card, iter, numt2cat);
         transform_bitvecs_to_ord(&mut self.store, &bitvecs);
 
@@ -352,7 +350,7 @@ impl <'a> Dataset<'a> {
         let mut binner = Binner::new(&mut self.bins_buffer_numt, lims);
         let mut grad_weight_sum = 0.0;
         let combiner = |bin: &mut NumT, d: NumT| *bin += d;
-        for (x, t) in self.example_sel.iter().map(|&i| (data[i], gradient[i] + EPSILON)) {
+        for (x, t) in self.example_sel.iter().map(|&i| (data[i], gradient[i].abs() + EPSILON)) {
             // XXX Apply weight transformation?
             grad_weight_sum += t;
             binner.insert(x, t, combiner);
@@ -393,38 +391,42 @@ impl <'a> Dataset<'a> {
     /// Depending on the gradient values, the number of bitvecs can vary slightly, with a maximum
     /// of 'max_nbins'. This method returns an upper bound of the nbins that is safe regardless of
     /// the used gradients.
-    pub fn get_nbins(&self, feat_id: usize) -> usize {
+    pub fn get_max_nbins(&self, feat_id: usize) -> usize {
         match self.data.feat_type(feat_id) {
             FeatType::LoCardCat => self.feat_card(feat_id),
             FeatType::HiCardCat => self.max_nbins,
             FeatType::Numerical => self.max_nbins,
         }
     }
+
+    /// Get the number of bins actually used (may be less than get_max_nbins, depending on the
+    /// target values).
+    pub fn get_nbins(&self, feat_id: usize) -> usize {
+        self.bitvecs[feat_id].len()
+    }
     
+    /// Get the binary representation for a specific split of a feature.
     pub fn get_bitvec(&self, feat_id: usize, split_id: usize) -> BitVecRef {
         let range = self.bitvecs[feat_id][split_id];
         self.store.get_bitvec(range)
     }
 
-    /// Get the split candidate value for a numerical feature
+    /// Split value: for low-card cat,  tree splits check equality with this value.
+    ///              for numerical,     tree splits check lt < with this value.
+    ///              for high-card cat, different, compare with super-category! 
     pub fn get_split_value(&self, feat_id: usize, split_id: usize) -> NumT {
-        let feat_values = &self.split_values[feat_id];
-        if feat_values.is_empty() {
-            panic!("no split values for feature {}", feat_id);
-        } else {
-            feat_values[split_id]
+        match self.feat_type(feat_id) {
+            FeatType::LoCardCat => split_id as NumT,
+            FeatType::HiCardCat => split_id as NumT, // == super-category
+            FeatType::Numerical => self.split_values[feat_id][split_id],
         }
     }
 
     /// Get the super-category (category of categories) of a value of a high-cardinality
     /// cateogrical feature.
-    pub fn get_super_category(&self, feat_id: usize, value: NumT) -> usize {
-        let super_categories = &self.super_categories[feat_id];
-        if super_categories.is_empty() {
-            panic!("no super categories for feature {}", feat_id);
-        } else {
-            super_categories[into_cat(value) as usize]
-        }
+    pub fn get_super_category(&self, feat_id: usize, value: NumT) -> CatT {
+        debug_assert_eq!(self.feat_type(feat_id), FeatType::HiCardCat);
+        self.super_categories[feat_id][into_cat(value) as usize]
     }
 
     pub fn nfeatures(&self) -> usize { self.feat_sel.len() }
@@ -519,7 +521,7 @@ mod test {
         let mut config = Config::new();
         config.csv_has_header = true;
         config.csv_delimiter = b';';
-        config.categorical_columns = vec![2];
+        config.categorical_features = vec![2];
 
         let data = Data::from_csv(&config, "a;bb;ccc;t\n1.0;2.0;0.0;0\n4;5;1;1\n\n").unwrap();
         let tindex = data.target_id();
@@ -575,7 +577,7 @@ mod test {
         config.random_seed = 2;
         config.feature_fraction = 0.67;
         config.example_fraction = 0.75;
-        config.categorical_columns = vec![1];
+        config.categorical_features = vec![1];
 
         let d = "1,0,3,0\n4,1,6,0\n7,1,9,0\n10,1,12,0\n13,0,15,0\n16,2,18,0\n19,2,21,0\n22,0,24,0";
         let data = Data::from_csv(&config, d).unwrap();
@@ -605,7 +607,7 @@ mod test {
     fn dataset_hicard_cat() {
         let mut config = Config::new();
         config.csv_has_header = false;
-        config.categorical_columns = vec![0];
+        config.categorical_features = vec![0];
         config.max_nbins = 8;
         let d = "1,1\n1,1\n2,1\n2,1\n3,2\n3,2\n4,2\n4,2\n5,3\n5,3\n6,3\n6,3\n7,4\n7,4\n8,4\n8,4\n\
                  9,5\n9,5\n10,5\n10,5\n11,6\n11,6\n12,6\n12,6\n13,7\n13,7\n14,7\n14,7\n15,8\n15,8\
@@ -627,6 +629,21 @@ mod test {
             println!("{:3}: {:032b}", i, x);
             assert_eq!(values[i], x);
         }
+    }
+
+    #[test]
+    fn dataset_nbins() {
+        let mut config = Config::new();
+        config.csv_has_header = false;
+        config.categorical_features = vec![0];
+        config.max_nbins = 8;
+        let d = "8,1\n7,1\n1,0\n7,1\n3,0\n8,1\n6,1\n2,0\n5,1\n4,1\n2,0\n7,1\n3,0\n8,1\n6,1\n3,0\n\
+                 7,1\n5,1\n5,1\n4,1\n2,0\n1,0\n6,1\n2,0\n6,1\n1,0\n4,1\n3,0\n4,1\n8,1\n1,0\n5,1";
+        let data = Data::from_csv(&config, d).unwrap();
+        let dataset = Dataset::construct_from_data(&config, &data, data.get_target());
+
+        assert_eq!(8, dataset.get_max_nbins(0));
+        assert_eq!(2, dataset.get_nbins(0));
     }
 
     fn dataset_num_aux(data_str: &str, values: &[u32]) {
@@ -682,16 +699,16 @@ mod test {
     #[test]
     fn dataset_all() {
         let mut config = Config::new();
-        config.categorical_columns = vec![0, 1];
+        config.categorical_features = vec![0, 1];
         config.csv_has_header = false;
         config.max_nbins = 8;
         let d = "6,16,1,0.01\n4,19,2,0.02\n5,6,3,0.02\n0,4,4,0.03\n6,5,5,0.03\n4,4,6,0.04\n1,15,7,0.08\n2,16,8,0.09\n6,8,9,0.09\n4,14,10,0.09\n2,2,11,0.1\n5,11,12,0.13\n4,1,13,0.14\n0,9,14,0.18\n0,18,15,0.22\n3,12,16,0.22\n1,18,17,0.24\n0,8,18,0.27\n6,17,19,0.28\n3,14,20,0.28\n0,12,21,0.3\n6,16,22,0.32\n5,1,23,0.35\n0,13,24,0.36\n6,17,25,0.37\n3,10,26,0.37\n2,3,27,0.38\n6,9,28,0.4\n1,18,29,0.44\n5,7,30,0.45\n2,4,31,0.45\n6,5,32,0.49\n0,14,33,0.49\n2,19,34,0.49\n1,20,35,0.5\n4,3,36,0.53\n3,9,37,0.54\n6,20,38,0.6\n2,12,39,0.61\n6,11,40,0.62\n2,6,41,0.63\n0,8,42,0.65\n3,19,43,0.68\n4,13,44,0.7\n4,15,45,0.71\n5,2,46,0.74\n5,10,47,0.74\n6,3,48,0.75\n6,7,49,0.76\n6,15,50,0.76\n3,11,51,0.77\n5,2,52,0.8\n6,1,53,0.82\n2,7,54,0.84\n1,4,55,0.86\n6,13,56,0.88\n3,5,57,0.89\n3,20,58,0.92\n5,6,59,0.92\n1,1,60,0.94\n4,2,61,0.96\n6,17,62,0.99\n1,3,63,0.99\n1,10,64,0.99";
         let data = Data::from_csv(&config, d).unwrap();
         let dataset = Dataset::construct_from_data(&config, &data, data.get_target());
 
-        assert_eq!(dataset.get_nbins(0), 7);
-        assert_eq!(dataset.get_nbins(1), 8);
-        assert_eq!(dataset.get_nbins(2), 8);
+        assert_eq!(dataset.get_max_nbins(0), 7);
+        assert_eq!(dataset.get_max_nbins(1), 8);
+        assert_eq!(dataset.get_max_nbins(2), 8);
         assert_eq!(dataset.get_nbins(0), 7);
         assert_eq!(dataset.get_nbins(1), 8);
         assert_eq!(dataset.get_nbins(2), 8);

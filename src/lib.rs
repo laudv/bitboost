@@ -6,7 +6,6 @@ pub const NEG_INF: NumT = std::f32::NEG_INFINITY;
 pub fn into_cat(x: NumT) -> CatT { debug_assert!(x >= 0.0 && x.round() == x); x as CatT }
 
 pub mod config;
-//pub mod dataset;
 pub mod data;
 pub mod bitblock;
 pub mod simd;
@@ -14,8 +13,6 @@ pub mod slice_store;
 pub mod tree;
 pub mod tree_learner;
 pub mod objective;
-pub mod binner; // TODO remove
-pub mod new_binner;
-//pub mod numfeat_mask_store; // TODO remove
+pub mod binner;
 pub mod metric;
-//pub mod boost;
+pub mod boost;
