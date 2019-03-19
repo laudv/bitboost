@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
-use crate::{NumT, into_cat};
-use crate::data::Dataset;
+use crate::{NumT, CatT, into_cat};
+use crate::data::Data;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SplitType {
@@ -41,10 +41,12 @@ pub struct Tree {
 
     shrinkage: NumT,
     bias: NumT,
+
+    super_categories: Vec<Vec<CatT>>,
 }
 
 impl Tree {
-    pub fn new(max_depth: usize) -> Tree {
+    pub fn new(max_depth: usize, super_categories: &Vec<Vec<CatT>>) -> Tree {
         assert!(max_depth > 0);
         let mut tree = Tree {
             ninternal: 0, // the root is the only leaf
@@ -54,6 +56,8 @@ impl Tree {
 
             shrinkage: 1.0,
             bias: 0.0,
+
+            super_categories: super_categories.clone(),
         };
         let nnodes = tree.max_nnodes();
 
@@ -96,13 +100,13 @@ impl Tree {
         self.ninternal += 1;
     }
 
-    fn predict_leaf_id_of_example(&self, dataset: &Dataset, i: usize) -> usize {
+    fn predict_leaf_id_of_example(&self, data: &Data, i: usize) -> usize {
         let mut node_id = 0;
         loop {
             let split_crit = &self.split_crits[node_id];
             let feat_id = split_crit.feature_id;
             let split_value = split_crit.split_value;
-            let value = dataset.get_feature(feat_id)[i];
+            let value = data.get_feature(feat_id)[i];
 
             match split_crit.split_type {
                 SplitType::LoCardCatEq => {
@@ -110,7 +114,7 @@ impl Tree {
                               else                    { self.right_child(node_id) }
                 },
                 SplitType::HiCardCatLt => {
-                    let spcat = dataset.get_super_category(feat_id, value);
+                    let spcat = self.super_categories[feat_id][into_cat(value) as usize];
                     let split_value = into_cat(split_value);
                     node_id = if spcat <= split_value { self.left_child(node_id) }
                               else                    { self.right_child(node_id) }
@@ -135,11 +139,11 @@ impl Tree {
     }
 
     /// Predict and store the result as defined by `f` in `predict_buf`.
-    pub fn predict_and<F>(&self, dataset: &Dataset, predict_buf: &mut [NumT], f: F)
+    pub fn predict_and<F>(&self, data: &Data, predict_buf: &mut [NumT], f: F)
     where F: Fn(NumT, &mut NumT) {
-        assert_eq!(predict_buf.len(), dataset.nexamples());
-        for i in 0..dataset.nexamples() {
-            let leaf_id = self.predict_leaf_id_of_example(dataset, i);
+        assert_eq!(predict_buf.len(), data.nexamples());
+        for i in 0..data.nexamples() {
+            let leaf_id = self.predict_leaf_id_of_example(data, i);
             let leaf_value = self.node_values[leaf_id];
             let prediction = self.shrinkage * (leaf_value + self.bias);
             //print!("prediction[{:4}]: {:+.4}", i, predict_buf[i]);
@@ -149,15 +153,15 @@ impl Tree {
         }
     }
 
-    pub fn predict_buf(&self, dataset: &Dataset, predict_buf: &mut [NumT]) {
-        self.predict_and(dataset, predict_buf, |prediction, buf_elem| {
+    pub fn predict_buf(&self, data: &Data, predict_buf: &mut [NumT]) {
+        self.predict_and(data, predict_buf, |prediction, buf_elem| {
             *buf_elem = prediction;
         });
     }
 
-    pub fn predict(&self, dataset: &Dataset) -> Vec<NumT> {
-        let mut predictions = vec![0.0; dataset.nexamples()];
-        self.predict_buf(dataset, &mut predictions);
+    pub fn predict(&self, data: &Data) -> Vec<NumT> {
+        let mut predictions = vec![0.0; data.nexamples()];
+        self.predict_buf(data, &mut predictions);
         predictions
     }
 }
@@ -217,11 +221,11 @@ impl AdditiveTree {
         self.trees.push(tree);
     }
 
-    pub fn predict(&self, dataset: &Dataset) -> Vec<NumT> {
-        let nexamples = dataset.nexamples();
+    pub fn predict(&self, data: &Data) -> Vec<NumT> {
+        let nexamples = data.nexamples();
         let mut accum = vec![self.bias; nexamples];
         for tree in &self.trees {
-            tree.predict_and(dataset, &mut accum, |prediction, accum| {
+            tree.predict_and(data, &mut accum, |prediction, accum| {
                 *accum += prediction;
             });
         }
@@ -240,11 +244,13 @@ impl AdditiveTree {
 
 #[cfg(test)]
 mod test {
+    use std::rc::Rc;
     use crate::tree::Tree;
 
     #[test]
     fn test_tree() {
-        let tree = Tree::new(3);
+        let super_categories = Vec::new();
+        let tree = Tree::new(3, &super_categories);
         assert_eq!(tree.max_depth(), 3);
         assert_eq!(tree.max_nleafs(), 8);
         assert_eq!(tree.max_ninternal(), 7);

@@ -29,19 +29,21 @@ fn single_tree(args: &[String]) -> Result<(), String> {
     let file = config.train.as_str();
     let data = Data::from_csv_path(&config, file)?;
     let target = data.get_target();
-    let dataset = Dataset::construct_from_data(&config, &data, target);
+    let target_lims = data.feat_limits(data.target_id());
+    let mut dataset = Dataset::new(&data);
+    dataset.update(&config, target, target_lims);
 
     let mut objective = objective_from_name(&config.objective, &config)
         .ok_or(format!("unknown objective '{}'", config.objective))?;
     objective.initialize(&config, &target);
     objective.update(&target);
 
-    let mut context = TreeLearnerContext::new(&config, &dataset);
-    let learner = TreeLearner::new(&mut context, objective.as_mut());
+    let mut context = TreeLearnerContext::new(&config, &data);
+    let learner = TreeLearner::new(&mut context, &dataset, objective.as_mut());
     let mut tree = learner.train();
     tree.set_bias(objective.bias());
 
-    let pred = tree.predict(&dataset);
+    let pred = tree.predict(&data);
     let ms: [Box<dyn Metric>; 4] = [Box::new(metric::L2::new()),
                                     Box::new(metric::Rmse::new()),
                                     Box::new(metric::BinaryLoss::new()),

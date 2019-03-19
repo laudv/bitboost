@@ -12,6 +12,7 @@ use crate::metric::Metric;
 
 pub struct Booster<'a> {
     config: &'a Config,
+    data: &'a Data,
     dataset: Dataset<'a>,
     objective: Box<dyn Objective>,
     iter_count: usize, 
@@ -25,10 +26,11 @@ impl <'a> Booster<'a> {
     {
         let objective = objective_from_name(&config.objective, config)?;
         let ensemble = AdditiveTree::new();
-        let dataset = Dataset::construct_from_data(&config, data, objective.gradients());
+        let dataset = Dataset::new(data);
 
         Some(Booster {
             config,
+            data,
             dataset,
             objective,
             iter_count: 0,
@@ -40,8 +42,8 @@ impl <'a> Booster<'a> {
     pub fn train(mut self) -> AdditiveTree {
         assert!(self.iter_count == 0);
         let start = Instant::now();
-        let target = self.dataset.get_target();
-        let mut r = TreeLearnerContext::new(self.config, &self.dataset);
+        let target = self.data.get_target();
+        let mut r = TreeLearnerContext::new(self.config, self.data);
 
         self.objective.initialize(self.config, target);
         self.ensemble.set_bias(self.objective.bias());
@@ -58,12 +60,13 @@ impl <'a> Booster<'a> {
     }
 
     fn train_one_iter(&mut self, ctx: &mut TreeLearnerContext) {
-        let target = self.dataset.get_target();
+        let target = self.data.get_target();
         self.iter_count += 1;
         self.objective.update(target);
+        self.dataset.update(self.config, self.objective.gradients(), self.objective.bounds());
 
         let tree = {
-            let learner = TreeLearner::new(ctx, self.objective.as_mut());
+            let learner = TreeLearner::new(ctx, &self.dataset, self.objective.as_mut());
             let start = Instant::now();
             let tree = learner.train();
             let el = start.elapsed();
@@ -74,7 +77,7 @@ impl <'a> Booster<'a> {
         };
 
         if !self.metrics.is_empty() {
-            let pred = tree.predict(self.dataset);
+            let pred = tree.predict(self.data);
             let mag = pred.iter()
                 .map(|&x| x * x)
                 .fold(0.0, |x, y| x+y)

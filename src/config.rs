@@ -82,7 +82,7 @@ parse_config!(Config,
     learning_rate: NumT = 1.0,                      parse_fromstr;
     reg_lambda: NumT = 0.0,                         parse_fromstr;
     min_examples_leaf: u32 = 1,                     parse_fromstr;
-    min_gain: NumT = 0.0,                           parse_fromstr;
+    min_gain: NumT = 1e-6,                          parse_fromstr;
     huber_alpha: NumT = 0.0,                        parse_fromstr;
 
     max_nbins: usize = 16,                          parse_fromstr;
