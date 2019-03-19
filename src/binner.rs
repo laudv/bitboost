@@ -101,8 +101,6 @@ where R: Copy + PartialOrd + Default + AddAssign + std::fmt::Display,
         debug_assert!(self.accum >= rank);
         debug_assert!(self.bin_index <= self.bins.len());
 
-        println!("RankIter: bin {} [{} - {}]", self.bin_index-1, self.prev_accum, self.accum);
-
         Some(self.bin_index - 1)
     }
 }

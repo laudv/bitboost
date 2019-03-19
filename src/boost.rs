@@ -7,28 +7,40 @@ use crate::config::Config;
 use crate::data::{Data, Dataset};
 use crate::tree::{AdditiveTree};
 use crate::tree_learner::{TreeLearnerContext, TreeLearner};
-use crate::objective::{Objective, objective_from_name};
+use crate::objective::{Objective};
 use crate::metric::Metric;
+
+macro_rules! time {
+    ($iter:expr, $msg:expr, $($block:tt)*) => {{
+        let start = Instant::now();
+        let res = {
+            $($block)*
+        };
+        let el = start.elapsed();
+        let seconds = el.as_secs() as f32 + el.subsec_micros() as f32 * 1e-6;
+        info!("I{:03} {}: {} s", $iter, $msg, seconds);
+        res
+    }}
+}
 
 pub struct Booster<'a> {
     config: &'a Config,
     data: &'a Data,
     dataset: Dataset<'a>,
-    objective: Box<dyn Objective>,
+    objective: &'a mut dyn Objective,
     iter_count: usize, 
     metrics: &'a [Box<dyn Metric>],
     ensemble: AdditiveTree,
 }
 
 impl <'a> Booster<'a> {
-    pub fn new(config: &'a Config, data: &'a Data, metrics: &'a [Box<dyn Metric>])
-        -> Option<Booster<'a>>
+    pub fn new(config: &'a Config, data: &'a Data,
+               objective: &'a mut dyn Objective,
+               metrics: &'a [Box<dyn Metric>]) -> Booster<'a>
     {
-        let objective = objective_from_name(&config.objective, config)?;
         let ensemble = AdditiveTree::new();
         let dataset = Dataset::new(data);
-
-        Some(Booster {
+        Booster {
             config,
             data,
             dataset,
@@ -36,7 +48,7 @@ impl <'a> Booster<'a> {
             iter_count: 0,
             metrics,
             ensemble,
-        })
+        }
     }
 
     pub fn train(mut self) -> AdditiveTree {
@@ -62,18 +74,13 @@ impl <'a> Booster<'a> {
     fn train_one_iter(&mut self, ctx: &mut TreeLearnerContext) {
         let target = self.data.get_target();
         self.iter_count += 1;
-        self.objective.update(target);
-        self.dataset.update(self.config, self.objective.gradients(), self.objective.bounds());
+        time!(self.iter_count, "obj time", self.objective.update(target));
+        time!(self.iter_count, "dataset time", 
+              self.dataset.update(self.config, self.objective.gradients(), self.objective.bounds()));
 
         let tree = {
-            let learner = TreeLearner::new(ctx, &self.dataset, self.objective.as_mut());
-            let start = Instant::now();
-            let tree = learner.train();
-            let el = start.elapsed();
-            let seconds = el.as_secs() as f32 * 1e3 + el.subsec_micros() as f32 * 1e-3;
-            info!("I{:03} tree time: {:.2} ms, #leaf={}", self.iter_count, seconds, tree.nleafs());
-
-            tree
+            let learner = TreeLearner::new(ctx, &self.dataset, self.objective);
+            time!(self.iter_count, "tree time", learner.train())
         };
 
         if !self.metrics.is_empty() {

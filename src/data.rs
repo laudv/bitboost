@@ -272,7 +272,7 @@ impl <'a> Dataset<'a> {
             entry.1 += 1;
         }
 
-        dbg!(&grad_lims);
+        //dbg!(&grad_lims);
 
         // accumulate category values: mean -> this determines their ordering
         // combine similar categories using quantile estimations
@@ -309,12 +309,12 @@ impl <'a> Dataset<'a> {
                 else { Ordering::Greater }
             }).expect_err("in this universe, nothing is equal (see cmp impl above)");
             super_categories[category] = super_category as CatT;
-            println!("category {:?} -> {:?} [mean {} < {:?}]", category, super_category, mean,
-                     split_weights.get(super_category));
+            //println!("category {:?} -> {:?} [mean {} < {:?}]", category, super_category, mean,
+            //         split_weights.get(super_category));
         }
 
-        dbg!(&split_weights);
-        dbg!(&super_categories);
+        //dbg!(&split_weights);
+        //dbg!(&super_categories);
 
         // generate bitvecs
         let iter = self.example_sel.iter().map(|&i| data[i]);
@@ -357,7 +357,7 @@ impl <'a> Dataset<'a> {
             split_values.push(binner.bin_representative(bin + 1));
         }
 
-        dbg!(&split_values);
+        //dbg!(&split_values);
 
         // construct bitvecs
         let iter = self.example_sel.iter().map(|&i| data[i]);
@@ -646,7 +646,7 @@ mod test {
         let mut dataset = Dataset::new(&data);
         dataset.update(&config, target, target_lims);
 
-        dbg!(&data.features);
+        //dbg!(&data.features);
 
         let ranges = &dataset.bitvecs[0];
         for (i, &r) in ranges.iter().enumerate() {

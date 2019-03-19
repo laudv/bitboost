@@ -69,9 +69,11 @@ fn parse_vec<T: FromStr>(value: &str) -> Option<Vec<T>> {
 parse_config!(Config,
     train: String = String::new(),                  parse_fromstr;
     test: String = String::new(),                   parse_fromstr;
-    objective: String = String::from("L2"),         parse_fromstr;
-
     target_feature: isize = -1,                     parse_fromstr;
+
+    objective: String = String::from("L2"),         parse_fromstr;
+    metrics: Vec<String> = vec![],                  parse_vec;
+    metric_frequency: usize = 1,                    parse_fromstr;
 
     csv_has_header: bool = true,                    parse_fromstr;
     csv_delimiter: u8 = b',',                       parse_fromstr;

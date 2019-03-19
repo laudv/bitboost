@@ -1,4 +1,4 @@
-use crate::{NumT, EPSILON};
+use crate::{NumT};
 
 
 
@@ -28,6 +28,35 @@ macro_rules! impl_metric {
 pub trait Metric {
     fn name(&self) -> &'static str;
     fn eval(&self, targets: &[NumT], predictions: &[NumT]) -> NumT;
+}
+
+pub fn metric_from_name(name: &str) -> Option<Box<dyn Metric>> {
+    match name.to_lowercase().as_str() {
+        "l2" => Some(Box::new(L2::new())),
+        "rmse" => Some(Box::new(Rmse::new())),
+        "binaryloss" | "binary_loss" => Some(Box::new(BinaryLoss::new())),
+        "binaryerror" | "binary_error" => Some(Box::new(BinaryError::new())),
+        _ => None
+    }
+}
+
+pub fn metrics_from_names(names: &[String]) -> Option<Vec<Box<dyn Metric>>> {
+    let mut metrics = Vec::new();
+    for name in names {
+        match metric_from_name(name) {
+            Some(metric) => metrics.push(metric),
+            None => return None,
+        }
+    }
+    Some(metrics)
+}
+
+pub fn metric_for_objective(name: &str) -> Option<Box<dyn Metric>> {
+    match name.to_lowercase().as_str() {
+        "l2" | "l1" | "huber" => Some(Box::new(Rmse::new())),
+        "binary" => Some(Box::new(BinaryLoss::new())),
+        _ => None
+    }
 }
 
 
