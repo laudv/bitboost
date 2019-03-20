@@ -11,15 +11,19 @@ rand = "0.6.1"
 fnv = "1.0.6"
 csv = "1.0.5"
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
+pretty_env_logger = "0.3.0"
 
 [dev-dependencies]
 #criterion = "0.2"
-pretty_env_logger = "0.3.0" # examples
 
 [profile.release]
 opt-level = 3
 #lto = false
 debug = true
+
+[[bin]]
+name = "spdyboost-run"
+path = "src/bin/run.rs"
 
 #[[bench]]
 #name = "bitvec"

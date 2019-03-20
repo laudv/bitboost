@@ -252,7 +252,7 @@ where 'a: 'b {
         let ploss = self.get_loss(pgrad, pcount);
 
         // Compute best split based on each feature's histogram.
-        for feat_id in 0..self.dataset.nfeatures() {
+        for &feat_id in self.dataset.feat_ids() {
             let hist = self.ctx.hist_store.get_hist(n2s.hists_range, feat_id);
             let nbins = self.dataset.get_nbins(feat_id);
 
@@ -636,7 +636,7 @@ macro_rules! build_histograms {
         fn $f(this: &mut TreeLearner, n2s: &Node2Split) {
             get_grad_sum!(get_grad_sum, $bsl, $sum_method);
 
-            for feat_id in 0..this.dataset.nfeatures() {
+            for &feat_id in this.dataset.feat_ids() {
                 // For each possible split, compute left grad & count stats
                 let nbins = this.dataset.get_nbins(feat_id);
                 for split_id in 0..nbins {
@@ -712,7 +712,6 @@ macro_rules! get_grad_sum {
                 let count = count as u32;
                 if count < this.ctx.config.min_examples_leaf { return (0.0, count); }
 
-                //if hess < min_hess || (n2s.hess_sum - hess) < min_hess { return (0.0, 0.0); }
                 let sum = unsafe { grads.sum_all_masked2_compr_unsafe(&indices, &ems, &fmask) };
                 let sum = $bsl::linproj(sum as NumT, count as NumT, bounds);
                 (sum, count)
