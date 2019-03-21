@@ -2,6 +2,12 @@ use std::io::Read;
 use std::path::Path;
 use std::fs::File;
 use std::cmp::Ordering;
+use std::ops::{Range, Deref, DerefMut};
+
+use log::debug;
+
+use rand::{Rng, SeedableRng};
+use rand::rngs::SmallRng;
 
 use csv;
 
@@ -75,7 +81,7 @@ impl Data {
                     for i in 0..record_len {
                         let value = record.get(i)
                             .and_then(|x| x.parse::<NumT>().ok())
-                            .ok_or(format!("number error at record {}", record_count))?;
+                            .ok_or(format!("Parse error at record {}", record_count))?;
 
                         features[i].push(value);
                         limits[i] = { let l = limits[i]; (l.0.min(value), l.1.max(value)) };
@@ -124,16 +130,22 @@ impl Data {
 
     pub fn nfeatures(&self) -> usize { self.nfeatures }
     pub fn nexamples(&self) -> usize { self.nexamples }
-    pub fn feat_name(&self, feature: usize) -> &str { &self.names[feature] }
-    pub fn feat_limits(&self, feat_id: usize) -> (NumT, NumT) { self.limits[feat_id] }
-    pub fn feat_type(&self, feat_id: usize) -> FeatType { self.ftypes[feat_id] }
-    pub fn feat_card(&self, feat_id: usize) -> usize { self.cards[feat_id] }
+    pub fn feat_name(&self, feature: usize) -> &str { &self.names[feature] } // TODO rename
+    pub fn feat_limits(&self, feat_id: usize) -> (NumT, NumT) { self.limits[feat_id] } // TODO rename
+    pub fn feat_type(&self, feat_id: usize) -> FeatType { self.ftypes[feat_id] } // TODO rename
+    pub fn feat_card(&self, feat_id: usize) -> usize { self.cards[feat_id] } // TODO rename
     pub fn target_id(&self) -> usize { self.nfeatures }
-    pub fn get_feature(&self, feat_id: usize) -> &[NumT] { &self.features[feat_id] }
-    pub fn get_target(&self) -> &[NumT] { &self.features[self.target_id()] }
-    pub fn get_max_nbins(&self, feat_id: usize) -> usize {
+    pub fn get_feature(&self, feat_id: usize) -> &[NumT] { &self.features[feat_id] } // TODO rename
+    pub fn get_target(&self) -> &[NumT] { &self.features[self.target_id()] } // TODO rename
+    pub fn max_nbins(&self, feat_id: usize) -> usize {
         match self.feat_type(feat_id) {
-            FeatType::LoCardCat => self.feat_card(feat_id),
+            FeatType::LoCardCat => {
+                // binary optimization: only consider one of two options, other goes right anyway
+                let nbins = self.feat_card(feat_id);
+                if nbins == 2       { 1 } 
+                else if nbins == 1  { 0 }
+                else                { nbins }
+            },
             FeatType::HiCardCat => self.max_nbins,
             FeatType::Numerical => self.max_nbins,
         }
@@ -161,10 +173,10 @@ pub struct Dataset<'a> {
     data: &'a Data,
 
     /// Feature sub-selection.
-    feat_sel: Vec<usize>,
+    active_features: Vec<usize>,
 
     /// Bagging: which rows from 'data' are used in this dataset.
-    example_sel: Vec<usize>,
+    active_examples: Vec<usize>,
 
     /// A store owning all bitsets.
     store: BitBlockStore,
@@ -188,8 +200,8 @@ impl <'a> Dataset<'a> {
     pub fn new(data: &'a Data) -> Dataset<'a> {
         Dataset {
             data,
-            feat_sel: Vec::new(),
-            example_sel: Vec::new(),
+            active_features: Vec::new(),
+            active_examples: Vec::new(),
             store: BitBlockStore::new(1024),
             bitvecs: Vec::new(),
             super_categories: Vec::new(),
@@ -199,15 +211,20 @@ impl <'a> Dataset<'a> {
         }
     }
 
+    // TODO remove
     fn reset(&mut self) {
-        self.feat_sel.clear();
-        self.example_sel.clear();
+        self.active_features.clear();
+        self.active_examples.clear();
         self.store.reset();
         self.bitvecs.clear();
         self.super_categories.clear();
         self.split_values.clear();
     }
 
+    // TODO rewrite update -- avoid doing expensive calculations when not necessary
+    // only update hicard/num features when no feature selection / bagging
+    // try to combine this with root node feature selection? -- avoids copying cat features at each
+    // iteration
     pub fn update(&mut self, config: &Config, gradient: &[NumT], grad_lims: (NumT, NumT)) {
         self.reset();
 
@@ -217,20 +234,21 @@ impl <'a> Dataset<'a> {
         let l = ((m as NumT) * config.feature_fraction).round() as usize;
 
         // Initializing data structures
-        self.example_sel.resize(k, 0);
-        self.feat_sel.resize(l, 0);
+        self.active_examples.resize(k, 0);
+        self.active_features.resize(l, 0);
         self.bitvecs.resize(m, Vec::new());
         self.super_categories.resize(m, Vec::new());
         self.split_values.resize(m, Vec::new());
 
         // Bagging and feature sub-selection
-        if n == k { self.example_sel.iter_mut().enumerate().for_each(|(i, x)| *x = i); }
-        else      { sample(n, &mut self.example_sel, config.random_seed); }
-        reservoir_sample(m, &mut self.feat_sel, config.random_seed + 10);
+        if n == k { self.active_examples.iter_mut().enumerate().for_each(|(i, x)| *x = i); }
+        else      { sample(n, &mut self.active_examples, config.random_seed); }
+        if m == l { self.active_features.iter_mut().enumerate().for_each(|(i, x)| *x = i); }
+        else      { reservoir_sample(m, &mut self.active_features, config.random_seed + 10); }
 
         // Feature preprocessing
         for u in 0..l {
-            let feat_id = self.feat_sel[u];
+            let feat_id = self.active_features[u];
 
             // determine type of feature:
             // [1] low-cardinality categorical = explicitly categorical + card < max_nbins
@@ -244,12 +262,34 @@ impl <'a> Dataset<'a> {
         }
     }
 
+//    pub fn initialize(&mut self) {
+//        let nfeatures = self.data.nfeatures();
+//        let nexamples = self.data.nexamples();
+//        let nactive_features = (nfeatures as NumT * self.config.feature_fraction).round() as usize;
+//        let nactive_examples = (nexamples as NumT * self.config.example_fraction).round() as usize;
+//
+//        self.active_features.extend(0..nactive_features);
+//        self.active_examples.extend(0..nactive_examples);
+//    }
+//
+//    pub fn feature_sample(&mut self, seed: u64) {
+//        let nfeatures = self.data.nfeatures();
+//        assert!(nfeatures > self.nactive_features());
+//        reservoir_sample(nfeatures, &mut self.active_features, self.config.random_seed + 11);
+//    }
+//
+//    pub fn example_sample(&mut self, seed: u64) {
+//        let nexamples = self.data.nexamples();
+//        assert!(nexamples > self.nactive_examples());
+//        sample(nexamples, &mut self.active_examples, self.config.random_seed + 82);
+//    }
+
     /// Generate bitsets for each categorical value.
     fn preprocess_locard_cat(&mut self, feat_id: usize) {
-        let n = self.nexamples();
+        let n = self.nactive_examples();
         let data = self.data.get_feature(feat_id);
         let card = self.data.feat_card(feat_id);
-        let iter = self.example_sel.iter().map(|&i| data[i]);
+        let iter = self.active_examples.iter().map(|&i| data[i]);
         let bitvecs = construct_bitvecs(&mut self.store, n, card, iter, |x| into_cat(x) as usize);
         self.bitvecs[feat_id] = bitvecs;
     }
@@ -259,13 +299,13 @@ impl <'a> Dataset<'a> {
     /// - Generate candidate split values using quantile estimates
     /// - Generate bitsets for IN-SPLITs
     fn preprocess_hicard_cat(&mut self, feat_id: usize, grad: &[NumT], grad_lims: (NumT, NumT)) {
-        let n = self.nexamples();
+        let n = self.nactive_examples();
         let data = self.data.get_feature(feat_id);
         let card = self.data.feat_card(feat_id);
 
         // collect gradient sums & counts per category value
         let mut grad_stat_pairs: Vec<(NumT, u32)> = vec![(0.0, 0); card];
-        for (i, x) in self.example_sel.iter().map(|&i| data[i]).enumerate() {
+        for (i, x) in self.active_examples.iter().map(|&i| data[i]).enumerate() {
             let category = into_cat(x) as usize;
             let entry = &mut grad_stat_pairs[category];
             entry.0 += grad[i];
@@ -317,7 +357,7 @@ impl <'a> Dataset<'a> {
         //dbg!(&super_categories);
 
         // generate bitvecs
-        let iter = self.example_sel.iter().map(|&i| data[i]);
+        let iter = self.active_examples.iter().map(|&i| data[i]);
         let numt2cat = |x| super_categories[into_cat(x) as usize] as usize;
         let bitvecs = construct_bitvecs(&mut self.store, n, super_card, iter, numt2cat);
         transform_bitvecs_to_ord(&mut self.store, &bitvecs);
@@ -329,7 +369,7 @@ impl <'a> Dataset<'a> {
     /// - Generate too many split value candidates using quantile estimates.
     /// - Treat the result as a high cardinality categorical 
     fn preprocess_num(&mut self, feat_id: usize, gradient: &[NumT]) {
-        let n = self.example_sel.len();
+        let n = self.nactive_examples();
         let data = self.data.get_feature(feat_id);
         let lims = self.data.feat_limits(feat_id);
 
@@ -339,7 +379,7 @@ impl <'a> Dataset<'a> {
         let mut binner = Binner::new(&mut self.bins_buffer_numt, lims);
         let mut grad_weight_sum = 0.0;
         let combiner = |bin: &mut NumT, d: NumT| *bin += d;
-        for (x, t) in self.example_sel.iter().map(|&i| (data[i], gradient[i].abs() + EPSILON)) {
+        for (x, t) in self.active_examples.iter().map(|&i| (data[i], gradient[i].abs() + EPSILON)) {
             // XXX Apply weight transformation?
             grad_weight_sum += t;
             binner.insert(x, t, combiner);
@@ -360,7 +400,7 @@ impl <'a> Dataset<'a> {
         //dbg!(&split_values);
 
         // construct bitvecs
-        let iter = self.example_sel.iter().map(|&i| data[i]);
+        let iter = self.active_examples.iter().map(|&i| data[i]);
         let numt2cat = |x| {
             split_values.binary_search_by(|&s| {
                 if s < x { Ordering::Less }
@@ -374,10 +414,9 @@ impl <'a> Dataset<'a> {
         self.split_values[feat_id] = split_values;
     }
 
-
     // ----------
     
-    /// Get the number of bins actually used (may be less than get_max_nbins, depending on the
+    /// Get the number of bins actually used (may be less than max_nbins, depending on the
     /// target values).
     pub fn get_nbins(&self, feat_id: usize) -> usize {
         self.bitvecs[feat_id].len()
@@ -411,14 +450,16 @@ impl <'a> Dataset<'a> {
         &self.super_categories
     }
 
-    pub fn nfeatures(&self) -> usize { self.feat_sel.len() }
-    pub fn feat_ids(&self) -> &[usize] { &self.feat_sel }
-    pub fn nexamples(&self) -> usize { self.example_sel.len() }
-    pub fn examples(&self) -> &[usize] { &self.example_sel }
+    pub fn nactive_features(&self) -> usize { self.active_features.len() }
+    pub fn active_features(&self) -> &[usize] { &self.active_features }
+    pub fn nactive_examples(&self) -> usize { self.active_examples.len() }
+    pub fn active_examples(&self) -> &[usize] { &self.active_examples }
+
     pub fn feat_name(&self, feature: usize) -> &str { &self.data.names[feature] }
     pub fn feat_limits(&self, feat_id: usize) -> (NumT, NumT) { self.data.limits[feat_id] }
     pub fn feat_type(&self, feat_id: usize) -> FeatType { self.data.ftypes[feat_id] }
     pub fn feat_card(&self, feat_id: usize) -> usize { self.data.cards[feat_id] }
+
     pub fn get_feature(&self, feat_id: usize) -> &[NumT] { self.data.get_feature(feat_id) }
     pub fn get_target(&self) -> &[NumT] { self.data.get_target() }
     pub fn get_data(&self) -> &Data { self.data }
@@ -430,12 +471,278 @@ impl <'a> Dataset<'a> {
 
 
 
+
+
+
+/*
+// ------------------------------------------------------------------------------------------------
+
+trait ActiveExContainer: Sized {
+    fn sample(size: usize, n: usize, rng: &mut SmallRng, sort: bool) -> Self;
+    fn resample(&mut self, n: usize, rng: &mut SmallRng, sort: bool);
+    fn sampling_enabled(&self) -> bool;
+    fn len(&self) -> usize;
+    fn _get_unchecked(&self, index: usize) -> usize;
+    fn index_iter<'a>(&'a self) -> ActiveExIter<'a, Self> {
+        ActiveExIter {
+            active_ex: self,
+            i: 0,
+        }
+    }
+}
+
+impl ActiveExContainer for Vec<usize> {
+    fn sample(size: usize, n: usize, rng: &mut SmallRng, sort: bool) -> Self {
+        let mut v = vec![0; size];
+        Self::resample(&mut v, n, rng, sort);
+        v
+    }
+    fn resample(&mut self, n: usize, rng: &mut SmallRng, sort: bool) {
+        self.iter_mut().for_each(|i| *i = rng.gen_range(0, n));
+        if sort { self.sort_unstable(); }
+    }
+    fn sampling_enabled(&self) -> bool { true }
+    fn len(&self) -> usize { Vec::len(self) }
+    fn _get_unchecked(&self, index: usize) -> usize {
+        unsafe {
+            debug_assert!(index < self.len());
+            *self.get_unchecked(index)
+        }
+    }
+}
+
+impl ActiveExContainer for Range<usize> {
+    fn sample(size: usize, n: usize, _: &mut SmallRng, _: bool) -> Self {
+        assert_eq!(size, n);
+        0..size
+    }
+    fn resample(&mut self, _: usize, _: &mut SmallRng, _: bool) {}
+    fn sampling_enabled(&self) -> bool { false }
+    fn len(&self) -> usize { std::iter::ExactSizeIterator::len(self) }
+    fn _get_unchecked(&self, index: usize) -> usize { self.start + index }
+}
+
+struct ActiveExIter<'a, T>
+where T: ActiveExContainer {
+    active_ex: &'a T,
+    i: usize,
+}
+
+impl <'a, T> Iterator for ActiveExIter<'a, T>
+where T: ActiveExContainer {
+    type Item = usize;
+    fn next(&mut self) -> Option<usize> {
+        if self.i < self.active_ex.len() {
+            let res = self.active_ex._get_unchecked(self.i);
+            self.i += 1;
+            Some(res)
+        } else {
+            None
+        }
+    }
+}
+
+
+
+
+
+struct GenericDataset<'a, ActiveEx>
+where ActiveEx: ActiveExContainer {
+    rng: SmallRng,
+    config: &'a Config,
+    data: &'a Data,
+
+    useful_features: Vec<usize>,
+    active_features: Vec<usize>,
+    active_examples: ActiveEx,
+
+    store: BitBlockStore,
+    bitvecs: Vec<Vec<SliceRange>>,
+
+    supercats: Vec<Vec<CatT>>,
+    split_values: Vec<Vec<NumT>>,
+}
+
+impl <'a, ActiveEx> GenericDataset<'a, ActiveEx>
+where ActiveEx: ActiveExContainer {
+    pub fn new(config: &'a Config, data: &'a Data) -> Self {
+        let mut rng = SmallRng::seed_from_u64(config.random_seed);
+        let mut useful_features = Vec::new();
+        let mut store = BitBlockStore::new(2048);
+
+        let nfeatures = data.nfeatures();
+        let nexamples = data.nexamples();
+        let active_nfeatures = (nfeatures as NumT * config.feature_fraction).round() as usize;
+        let active_nexamples = (nexamples as NumT * config.example_fraction).round() as usize;
+
+        let bitvecs         = vec![Vec::new(); nfeatures];
+        let supercats       = vec![Vec::new(); nfeatures];
+        let split_values    = vec![Vec::new(); nfeatures];
+        let active_features = vec![0; active_nfeatures];
+        let active_examples = ActiveEx::sample(active_nexamples, nexamples, &mut rng,
+                                            config.sort_example_fraction);
+
+        for feat_id in 0..data.nfeatures() {
+            let max_nbins = data.max_nbins(feat_id);
+            if max_nbins == 0 { continue; } // not a useful feature, only 1 value
+
+            useful_features.push(feat_id);
+            bitvecs[feat_id] = (0..max_nbins)
+                .map(|_| store.alloc_zero_bits(active_nexamples))
+                .collect();
+        }
+
+        GenericDataset {
+            rng,
+            config,
+            data,
+            useful_features,
+            active_features,
+            active_examples,
+            store,
+            bitvecs,
+            supercats,
+            split_values,
+        }
+    }
+
+    pub fn data(&self) -> &Data { self.data }
+    pub fn is_feature_sampling_enabled(&self) -> bool { self.config.feature_fraction < 1.0 }
+    pub fn is_example_sampling_enabled(&self) -> bool { self.active_examples.sampling_enabled() }
+    pub fn active_nexamples(&self) -> usize { self.active_examples.len() }
+
+    pub fn update(&mut self, gradient: &[NumT], grad_lims: (NumT, NumT)) {
+        if self.is_feature_sampling_enabled() { self.sample_features() }
+        if self.is_example_sampling_enabled() { self.sample_examples() }
+
+        self.update_features(gradient, grad_lims);
+    }
+
+    fn update_features(&mut self, gradient: &[NumT], grad_lims: (NumT, NumT)) {
+        for u in 0..self.active_features.len() {
+            let feat_id = self.active_features[u];
+
+            match self.data.feat_type(feat_id) {
+                FeatType::LoCardCat => {
+                    // if bagging happened, we need to refill bitsets
+                    if self.is_example_sampling_enabled() {
+                        self.process_locard_cat(feat_id);
+                    }
+                },
+                FeatType::HiCardCat => {
+                    self.process_hicard_cat(feat_id, gradient, grad_lims);
+                }
+                FeatType::Numerical => {
+                    self.process_num(feat_id, gradient, grad_lims);
+                }
+            }
+        }
+    }
+
+
+    fn sample_features(&mut self) {
+        let n = self.useful_features.len();
+        let buffer = &mut self.active_features;
+
+        // sample unique values from 1..n (the number of useful features)
+        reservoir_sample(n, buffer, self.config.random_seed + 12);
+
+        // mapping indices to useful features
+        for i in self.active_features.iter_mut() {
+            *i = self.useful_features[*i]
+        }
+    }
+
+    fn sample_examples(&mut self)
+    where ActiveEx: DerefMut<Target = [usize]> {
+        let n = self.data.nexamples();
+        let buffer = &mut self.active_examples;
+        sample(n, buffer, self.config.random_seed + 82);
+    }
+
+    fn process_locard_cat(&mut self, feat_id: usize) {
+        self.zero_bitvecs_of_feature(feat_id);
+
+        let bitvecs = &self.bitvecs[feat_id];
+        let data = self.data.get_feature(feat_id);
+
+        for (i_local, i_global) in self.active_examples.index_iter().enumerate() {
+            let cat = into_cat(data[i_global]) as usize;
+            self.store.get_bitvec_mut(bitvecs[cat]).enable_bit(i_local);
+        }
+    }
+
+    fn process_locard_cat_iter<I>(store: &mut BitBlockStore, bitvecs: &[SliceRange], data: &[NumT],
+                                  iter: I)
+    where I: Iterator<Item = (usize, usize)>
+    {
+        for (i_local, i_global) in iter {
+            let cat = into_cat(data[i_global]) as usize;
+            store.get_bitvec_mut(bitvecs[cat]).enable_bit(i_local);
+        }
+    }
+
+    fn process_hicard_cat(&mut self, feat_id: usize, gradient: &[NumT], grad_lims: (NumT, NumT)) {
+        self.zero_bitvecs_of_feature(feat_id);
+    }
+
+    fn process_num(&mut self, feat_id: usize, gradient: &[NumT], grad_lims: (NumT, NumT)) {
+        self.zero_bitvecs_of_feature(feat_id);
+
+    }
+
+    fn zero_bitvecs_of_feature(&mut self, feat_id: usize) {
+        for &range in &self.bitvecs[feat_id] {
+            self.store.get_bitvec_mut(range)
+                .cast_mut::<u64>()
+                .iter_mut()
+                .for_each(|x| *x = 0);
+        }
+    }
+}
+
+impl <'a> GenericDataset<'a, Vec<usize>> {
+
+}
+
+impl <'a> GenericDataset<'a, Range<usize>> {
+
+}
+
+enum InnerDataset<'a> {
+    ExampleSamplingEnabled(GenericDataset<'a, Vec<usize>>),
+    ExampleSamplingDisabled(GenericDataset<'a, Range<usize>>),
+}
+
+pub struct XxxDataset<'a> { // TODO rename
+    inner: InnerDataset<'a>
+}
+
+impl <'a> XxxDataset<'a> {
+    pub fn new(config: &'a Config, data: &'a Data) -> Self {
+        if config.example_fraction < 1.0 {
+            let dataset = GenericDataset::new(config, data);
+            let inner = InnerDataset::ExampleSamplingEnabled(dataset);
+            Self { inner }
+        } else {
+            let dataset = GenericDataset::new(config, data);
+            let inner = InnerDataset::ExampleSamplingDisabled(dataset);
+            Self { inner }
+        }
+    }
+
+    pub fn update(&mut self) {
+
+    }
+}
+
+*/
+
+
+
 // ------------------------------------------------------------------------------------------------
 
 fn sample(n: usize, buffer: &mut [usize], seed: u64) {
-    use rand::{Rng, SeedableRng};
-    use rand::rngs::SmallRng;
-
     let mut rng: SmallRng = SmallRng::seed_from_u64(seed);
     buffer.iter_mut().for_each(|i| *i = rng.gen_range(0, n));
     buffer.sort_unstable();
@@ -458,6 +765,7 @@ fn reservoir_sample(n: usize, buffer: &mut [usize], seed: u64) {
     buffer.sort_unstable();
 }
 
+// TODO remove
 fn construct_bitvecs<Iter, CatMap>(store: &mut BitBlockStore, nexamples: usize, card: usize,
                                    iter: Iter, numt2cat: CatMap)
     -> Vec<SliceRange>
@@ -476,6 +784,15 @@ where Iter: Iterator<Item=NumT>,
     }
 
     bitvecs
+}
+
+fn fill_bitvecs<F>(store: &mut BitBlockStore, bitvecs: &[SliceRange], getter: F)
+where F: Fn(usize) -> (usize, usize) {
+    for i in 0..10 {
+        let (index, category) = getter(i);
+        let mut bitvec = store.get_bitvec_mut(bitvecs[category]);
+        bitvec.enable_bit(index);
+    }
 }
 
 fn transform_bitvecs_to_ord(store: &mut BitBlockStore, bitvecs: &[SliceRange]) {
@@ -550,202 +867,5 @@ mod test {
         assert_eq!(data.feat_limits(0), (1.0, 4.0));
         assert_eq!(data.feat_limits(1), (2.0, 5.0));
         assert_eq!(data.feat_limits(2), (3.0, 6.0));
-    }
-    
-    #[test]
-    fn basic_dataset() {
-        let mut config = Config::new();
-        config.csv_has_header = false;
-        config.random_seed = 2;
-        config.feature_fraction = 0.67;
-        config.example_fraction = 0.75;
-        config.categorical_features = vec![1];
-
-        let d = "1,0,3,0\n4,1,6,0\n7,1,9,0\n10,1,12,0\n13,0,15,0\n16,2,18,0\n19,2,21,0\n22,0,24,0";
-        let data = Data::from_csv(&config, d).unwrap();
-
-        assert_eq!(data.nexamples(), 8);
-        assert_eq!(data.feat_card(1), 3);
-
-        let target = data.get_target();
-        let target_lims = data.feat_limits(data.target_id());
-        let mut dataset = Dataset::new(&data);
-        dataset.update(&config, target, target_lims);
-
-        assert_eq!(dataset.feat_sel.len(), 2);
-        assert_eq!(dataset.example_sel.len(), 6);
-        assert_eq!(&dataset.feat_sel, &[1, 2]);
-        assert_eq!(&dataset.example_sel, &[0, 2, 2, 5, 7, 7]);
-
-        let ranges = &dataset.bitvecs[1];
-        let values = vec![0b110001, 0b000110, 0b001000];
-        for i in 0..3 {
-            let bitvec = dataset.store.get_bitvec(ranges[i]);
-            let x = bitvec.cast::<u32>()[0];
-            println!("{:3}: {:032b}", i, x);
-            assert_eq!(values[i], x);
-        }
-    }
-
-    #[test]
-    fn dataset_hicard_cat() {
-        let mut config = Config::new();
-        config.csv_has_header = false;
-        config.categorical_features = vec![0];
-        config.max_nbins = 8;
-        let d = "1,1\n1,1\n2,1\n2,1\n3,2\n3,2\n4,2\n4,2\n5,3\n5,3\n6,3\n6,3\n7,4\n7,4\n8,4\n8,4\n\
-                 9,5\n9,5\n10,5\n10,5\n11,6\n11,6\n12,6\n12,6\n13,7\n13,7\n14,7\n14,7\n15,8\n15,8\
-                 \n16,8\n16,8";
-        let data = Data::from_csv(&config, d).unwrap();
-        let target = data.get_target();
-        let target_lims = data.feat_limits(data.target_id());
-        let mut dataset = Dataset::new(&data);
-        dataset.update(&config, target, target_lims);
-
-        let ranges = &dataset.bitvecs[0];
-        let values = vec![0b00000000000000000000000000001111u32,
-                          0b00000000000000000000000011111111,
-                          0b00000000000000000000111111111111,
-                          0b00000000000000001111111111111111,
-                          0b00000000000011111111111111111111,
-                          0b00000000111111111111111111111111,
-                          0b00001111111111111111111111111111];
-        for (i, &r) in ranges.iter().enumerate() {
-            let bitvec = dataset.store.get_bitvec(r);
-            let x = bitvec.cast::<u32>()[0];
-            println!("{:3}: {:032b}", i, x);
-            assert_eq!(values[i], x);
-        }
-    }
-
-    #[test]
-    fn dataset_nbins() {
-        let mut config = Config::new();
-        config.csv_has_header = false;
-        config.categorical_features = vec![0];
-        config.max_nbins = 8;
-        let d = "8,1\n7,1\n1,0\n7,1\n3,0\n8,1\n6,1\n2,0\n5,1\n4,1\n2,0\n7,1\n3,0\n8,1\n6,1\n3,0\n\
-                 7,1\n5,1\n5,1\n4,1\n2,0\n1,0\n6,1\n2,0\n6,1\n1,0\n4,1\n3,0\n4,1\n8,1\n1,0\n5,1";
-        let data = Data::from_csv(&config, d).unwrap();
-        let target = data.get_target();
-        let target_lims = data.feat_limits(data.target_id());
-        let mut dataset = Dataset::new(&data);
-        dataset.update(&config, target, target_lims);
-
-        assert_eq!(8, data.get_max_nbins(0));
-        assert_eq!(2, dataset.get_nbins(0));
-    }
-
-    fn dataset_num_aux(data_str: &str, values: &[u32]) {
-        let mut config = Config::new();
-        config.csv_has_header = false;
-        config.max_nbins = 8;
-        let data = Data::from_csv(&config, data_str).unwrap();
-        let target = data.get_target();
-        let target_lims = data.feat_limits(data.target_id());
-        let mut dataset = Dataset::new(&data);
-        dataset.update(&config, target, target_lims);
-
-        //dbg!(&data.features);
-
-        let ranges = &dataset.bitvecs[0];
-        for (i, &r) in ranges.iter().enumerate() {
-            let bitvec = dataset.store.get_bitvec(r);
-            let x = bitvec.cast::<u32>()[0];
-            println!("{:3}: {:032b}", i, x);
-            assert_eq!(values[i], x);
-        }
-    }
-
-    #[test]
-    fn dataset_num1() {
-        let values = vec![0b00000000000000000000000000001111u32,
-                          0b00000000000000000000000011111111,
-                          0b00000000000000000000011111111111,
-                          0b00000000000000001111111111111111,
-                          0b00000000000000111111111111111111,
-                          0b00000000001111111111111111111111,
-                          0b00000001111111111111111111111111,
-                          0b00011111111111111111111111111111];
-        let d = "0,1\n6,1\n11,1\n11,1\n13,1\n21,1\n24,1\n31,1\n36,1\n38,1\n42,1\n48,1\n60,1\n60,1\
-                 \n61,1\n61,1\n64,1\n68,1\n75,1\n80,1\n81,1\n84,1\n85,1\n86,1\n89,1\n90,1\n91,1\n\
-                 92,1\n92,1\n93,1\n96,1\n98,1";
-        dataset_num_aux(d, &values);
-    }
-
-    #[test]
-    fn dataset_num2() {
-        let values = vec![0b00000000000000000000011111111111u32, // less weight
-                          0b00000000000000001111111111111111,
-                          0b00000000000001111111111111111111,
-                          0b00000000001111111111111111111111,
-                          0b00000000111111111111111111111111,
-                          0b00000111111111111111111111111111,
-                          0b00011111111111111111111111111111,
-                          0b01111111111111111111111111111111]; // more weight -> finer splits
-        let d = "0,1\n6,2\n11,3\n11,4\n13,5\n21,7\n24,8\n31,9\n36,10\n38,11\n42,12\n48,13\n60,14\
-                 \n60,15\n61,16\n61,18\n64,19\n68,20\n75,21\n80,22\n81,23\n84,24\n85,25\n86,26\n\
-                 89,27\n90,28\n91,30\n92,31\n92,32\n93,33\n96,34\n98,35";
-        dataset_num_aux(d, &values);
-    }
-
-    #[test]
-    fn dataset_all() {
-        let mut config = Config::new();
-        config.categorical_features = vec![0, 1];
-        config.csv_has_header = false;
-        config.max_nbins = 8;
-        let d = "6,16,1,0.01\n4,19,2,0.02\n5,6,3,0.02\n0,4,4,0.03\n6,5,5,0.03\n4,4,6,0.04\n1,15,7,0.08\n2,16,8,0.09\n6,8,9,0.09\n4,14,10,0.09\n2,2,11,0.1\n5,11,12,0.13\n4,1,13,0.14\n0,9,14,0.18\n0,18,15,0.22\n3,12,16,0.22\n1,18,17,0.24\n0,8,18,0.27\n6,17,19,0.28\n3,14,20,0.28\n0,12,21,0.3\n6,16,22,0.32\n5,1,23,0.35\n0,13,24,0.36\n6,17,25,0.37\n3,10,26,0.37\n2,3,27,0.38\n6,9,28,0.4\n1,18,29,0.44\n5,7,30,0.45\n2,4,31,0.45\n6,5,32,0.49\n0,14,33,0.49\n2,19,34,0.49\n1,20,35,0.5\n4,3,36,0.53\n3,9,37,0.54\n6,20,38,0.6\n2,12,39,0.61\n6,11,40,0.62\n2,6,41,0.63\n0,8,42,0.65\n3,19,43,0.68\n4,13,44,0.7\n4,15,45,0.71\n5,2,46,0.74\n5,10,47,0.74\n6,3,48,0.75\n6,7,49,0.76\n6,15,50,0.76\n3,11,51,0.77\n5,2,52,0.8\n6,1,53,0.82\n2,7,54,0.84\n1,4,55,0.86\n6,13,56,0.88\n3,5,57,0.89\n3,20,58,0.92\n5,6,59,0.92\n1,1,60,0.94\n4,2,61,0.96\n6,17,62,0.99\n1,3,63,0.99\n1,10,64,0.99";
-        let data = Data::from_csv(&config, d).unwrap();
-        let target = data.get_target();
-        let target_lims = data.feat_limits(data.target_id());
-        let mut dataset = Dataset::new(&data);
-        dataset.update(&config, target, target_lims);
-
-        assert_eq!(data.get_max_nbins(0), 7);
-        assert_eq!(data.get_max_nbins(1), 8);
-        assert_eq!(data.get_max_nbins(2), 8);
-        assert_eq!(dataset.get_nbins(0), 7);
-        assert_eq!(dataset.get_nbins(1), 8);
-        assert_eq!(dataset.get_nbins(2), 8);
-
-        let values = vec![0b0000000000000000000000100000000100000000100100100110000000001000,
-                          0b1100100001000000000000000000010000010000000000010000000001000000,
-                          0b0000000000100000000000010100001001000100000000000000010010000000,
-                          0b0000001100000100000001000001000000000010000010001000000000000000,
-                          0b0001000000000000000110000000100000000000000000000001001000100010,
-                          0b0000010000001000011000000000000000100000010000000000100000000100,
-                          0b0010000010010011100000001010000010001001001001000000000100010001,
-                          0b0, // skip
-                          
-                          0b0000000000000000000000000000000100010000001010010100001010000001,
-                          0b0000000001000000000000100000000101010000001010110100001110101001,
-                          0b0000000001000000000000100101000101011000001110111110001110101001,
-                          0b0000000101000000000001100101001111011000001110111110001110111011,
-                          0b0000010101000110000101111101001111011000001110111110101111111111,
-                          0b0010110101010110000101111101001111011001011111111111101111111111,
-                          0b0011110111011110001111111101001111011001111111111111111111111111,
-                          0b0111111111011110101111111111111111011101111111111111111111111111,
-                          
-                          0b0000000000000000000000000000000000000000011111111111111111111111,
-                          0b0000000000000000000000000000000011111111111111111111111111111111,
-                          0b0000000000000000000000000111111111111111111111111111111111111111,
-                          0b0000000000000000000011111111111111111111111111111111111111111111,
-                          0b0000000000000001111111111111111111111111111111111111111111111111,
-                          0b0000000000011111111111111111111111111111111111111111111111111111,
-                          0b0000000111111111111111111111111111111111111111111111111111111111,
-                          0b0001111111111111111111111111111111111111111111111111111111111111u64];
-
-        for k in 0..3 {
-            println!("== feature {}", k);
-            let ranges = &dataset.bitvecs[k];
-            for (i, &r) in ranges.iter().enumerate() {
-                let bitvec = dataset.store.get_bitvec(r);
-                let x = bitvec.cast::<u64>()[0];
-                println!("{:3}: {:064b}", i, x);
-                assert_eq!(values[k * 8 + i], x);
-            }
-            println!();
-        }
     }
 }

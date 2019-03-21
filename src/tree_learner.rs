@@ -126,7 +126,7 @@ pub struct TreeLearnerContext<'a> {
 impl <'a> TreeLearnerContext<'a> {
     pub fn new(config: &'a Config, data: &'a Data) -> Self {
         let nbins_iter = (0..data.nfeatures())
-            .map(|feat_id| data.get_max_nbins(feat_id) as u32);
+            .map(|feat_id| data.max_nbins(feat_id) as u32);
 
         TreeLearnerContext {
             config,
@@ -252,7 +252,7 @@ where 'a: 'b {
         let ploss = self.get_loss(pgrad, pcount);
 
         // Compute best split based on each feature's histogram.
-        for &feat_id in self.dataset.feat_ids() {
+        for &feat_id in self.dataset.active_features() {
             let hist = self.ctx.hist_store.get_hist(n2s.hists_range, feat_id);
             let nbins = self.dataset.get_nbins(feat_id);
 
@@ -533,7 +533,7 @@ macro_rules! get_root_n2s {
     ($f:ident, $bsl:ident, $hist_fun:ident) => {
         fn $f(this: &mut TreeLearner) -> Node2Split {
             let bounds = this.objective.bounds();
-            let nexamples  = this.dataset.nexamples();
+            let nexamples  = this.dataset.nactive_examples();
             let grad_range = this.ctx.grad_store.alloc_zero_bitslice::<$bsl>(nexamples);
             let mask_range = this.ctx.mask_store.alloc_one_bits(nexamples);
             let nblocks    = this.ctx.mask_store.get_bitvec(mask_range).block_len::<u32>();
@@ -636,7 +636,7 @@ macro_rules! build_histograms {
         fn $f(this: &mut TreeLearner, n2s: &Node2Split) {
             get_grad_sum!(get_grad_sum, $bsl, $sum_method);
 
-            for &feat_id in this.dataset.feat_ids() {
+            for &feat_id in this.dataset.active_features() {
                 // For each possible split, compute left grad & count stats
                 let nbins = this.dataset.get_nbins(feat_id);
                 for split_id in 0..nbins {

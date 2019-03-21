@@ -95,6 +95,10 @@ parse_config!(Config,
     random_seed: u64 = 1,                           parse_fromstr;
     feature_fraction: NumT = 1.0,                   parse_fromstr;
     example_fraction: NumT = 1.0,                   parse_fromstr;
+    sample_freq: usize = 1,                         parse_fromstr;
+
+    prediction_len: usize = 0,                      parse_fromstr;
+    sort_examples: bool = true,                     parse_fromstr;
 );
 
 

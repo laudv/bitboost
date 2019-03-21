@@ -7,6 +7,7 @@ pub fn into_cat(x: NumT) -> CatT { debug_assert!(x >= 0.0 && x.round() == x); x 
 
 pub mod config;
 pub mod data;
+pub mod dataset;
 pub mod bitblock;
 pub mod simd;
 pub mod slice_store;
