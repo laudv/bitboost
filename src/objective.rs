@@ -1,6 +1,4 @@
-use log::info;
-
-use crate::{NumT};
+use crate::{NumT, POS_INF, NEG_INF};
 use crate::config::Config;
 use crate::binner::Binner;
 
@@ -86,8 +84,6 @@ macro_rules! objective_struct {
                 self.gradients.clear();
                 self.predictions.resize(n, bias);
                 self.gradients.resize(n, 0.0);
-                info!("{} objective: bias: {}, learning_rate: {}", self.name(), bias,
-                    self.learning_rate);
             }
 
             /// Update the current predictions. `predict_leaf_value` should always call this and
@@ -157,8 +153,8 @@ impl Objective for L2 {
         assert_eq!(self.predictions.len(), n);
         assert_eq!(self.gradients.len(), n);
 
-        let mut min = 1.0/0.0;
-        let mut max = -1.0/0.0;
+        let mut min = POS_INF;
+        let mut max = NEG_INF;
         for i in 0..n {
             let err = targets[i] - self.predictions[i];
             min = NumT::min(min, err);
@@ -362,7 +358,7 @@ impl Objective for Binary {
 
         self.initialize_base(config, n, prior);
 
-        info!("Binary objective: posivite: {}, negative: {}, prior: {}", npos, nneg, prior);
+        println!("[   ] binary objective: pos {}, neg {}, prior {}", npos, nneg, prior);
     }
 
     fn update(&mut self, targets: &[NumT]) {

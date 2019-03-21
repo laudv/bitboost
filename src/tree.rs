@@ -42,11 +42,11 @@ pub struct Tree {
     shrinkage: NumT,
     bias: NumT,
 
-    super_categories: Vec<Vec<CatT>>,
+    supercats: Vec<Vec<CatT>>,
 }
 
 impl Tree {
-    pub fn new(max_depth: usize, super_categories: &Vec<Vec<CatT>>) -> Tree {
+    pub fn new(max_depth: usize) -> Tree {
         assert!(max_depth > 0);
         let mut tree = Tree {
             ninternal: 0, // the root is the only leaf
@@ -57,7 +57,7 @@ impl Tree {
             shrinkage: 1.0,
             bias: 0.0,
 
-            super_categories: super_categories.clone(),
+            supercats: Vec::new(),
         };
         let nnodes = tree.max_nnodes();
 
@@ -114,7 +114,8 @@ impl Tree {
                               else                    { self.right_child(node_id) }
                 },
                 SplitType::HiCardCatLt => {
-                    let spcat = self.super_categories[feat_id][into_cat(value) as usize];
+                    debug_assert!(!self.supercats.is_empty(), "tree supercats not set?");
+                    let spcat = self.supercats[feat_id][into_cat(value) as usize];
                     let split_value = into_cat(split_value);
                     node_id = if spcat <= split_value { self.left_child(node_id) }
                               else                    { self.right_child(node_id) }
@@ -136,6 +137,12 @@ impl Tree {
 
     pub fn set_bias(&mut self, bias: NumT) {
         self.bias = bias;
+    }
+
+    pub fn set_supercats(&mut self, supercats: Vec<Vec<CatT>>) {
+        debug_assert!(self.supercats.is_empty(), "setting supercats twice?");
+        debug_assert!(!supercats.is_empty(), "setting empty supercats?");
+        self.supercats = supercats;
     }
 
     /// Predict and store the result as defined by `f` in `predict_buf`.
@@ -244,13 +251,11 @@ impl AdditiveTree {
 
 #[cfg(test)]
 mod test {
-    use std::rc::Rc;
     use crate::tree::Tree;
 
     #[test]
     fn test_tree() {
-        let super_categories = Vec::new();
-        let tree = Tree::new(3, &super_categories);
+        let tree = Tree::new(3);
         assert_eq!(tree.max_depth(), 3);
         assert_eq!(tree.max_nleafs(), 8);
         assert_eq!(tree.max_ninternal(), 7);

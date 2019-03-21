@@ -1,11 +1,12 @@
 use std::ops::{Add, Sub};
 use std::mem::size_of;
 
-use log::debug;
+use log::{warn, debug};
 
 use crate::{NumT, CatT};
 use crate::config::Config;
-use crate::data::{Data, Dataset, FeatType};
+use crate::data::{Data, FeatType};
+use crate::dataset::Dataset;
 use crate::tree::{Tree, SplitType, SplitCrit};
 use crate::slice_store::{SliceRange, HistStore, BitBlockStore, BitVecRef};
 use crate::slice_store::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2};
@@ -174,6 +175,37 @@ macro_rules! dispatch {
     }}
 }
 
+/// Matrix of dynamic choises to make, depending on:
+///  - is mask compressed: use *_compr or not
+///  - is example_sampling_enabled: map local bagged indexes to global dataset indexes
+#[allow(unused_macros)]
+macro_rules! extend_examples {
+    ($n2s:ident, $ds:expr, $examples:ident;
+     if_compressed { let idxs = $idxs:expr; $iter_fn:expr };
+     or_else $iter_uncompr:expr ) =>
+    {{
+        $examples.clear();
+        if $n2s.compressed {
+            let idxs = $idxs;
+            let iter = ($iter_fn)(&idxs);
+            extend_examples!(@aux $ds, $examples, iter);
+        } else {
+            let iter = $iter_uncompr;
+            extend_examples!(@aux $ds, $examples, iter);
+        }
+    }};
+    (@aux $ds:expr, $examples:ident, $iter:ident) =>
+    {{
+        if $ds.example_sampling_enabled() {
+            println!("BAGGING!!!!!");
+            for i in $iter { $examples.push($ds.map_index(i)); }
+        } else {
+            $examples.extend($iter);
+        }
+
+    }}
+}
+
 
 
 
@@ -186,6 +218,7 @@ where 'a: 'b, // a lives longer than b
       'c: 'b, // c lives longer than b
 {
     ctx: &'b mut TreeLearnerContext<'a>,
+    data: &'b Data,
     dataset: &'b Dataset<'c>,
     objective: &'b mut dyn Objective,
     tree: Tree,
@@ -197,9 +230,10 @@ where 'a: 'b {
                objective: &'b mut dyn Objective) -> Self
     {
         ctx.reset();
-        let tree = Tree::new(ctx.config.max_tree_depth, dataset.get_super_categories());
+        let tree = Tree::new(ctx.config.max_tree_depth);
         TreeLearner {
             ctx,
+            data: dataset.data(),
             dataset,
             objective,
             tree,
@@ -218,7 +252,7 @@ where 'a: 'b {
                 // predict leaf value, easy case: we have example masks
                 self.predict_leaf_value(&n2s);
             } else {
-                debug_assert!(self.debug_print(&n2s, &split));
+                //debug_assert!(self.debug_print(&n2s, &split));
 
                 // If the children aren't at maximal depth, push to split later.
                 // Else, the children are leafs: generate leaf values.
@@ -239,8 +273,8 @@ where 'a: 'b {
             self.ctx.mask_store.free_blocks(n2s.mask_range);
         }
         
-        assert!(self.tree.nnodes() > 1);
-        self.tree
+        if self.tree.nnodes() == 1 { warn!("tree with single root node"); }
+        self.tree // can have only a single root node
     }
 
     fn find_best_split(&mut self, n2s: &Node2Split) -> Split {
@@ -271,7 +305,7 @@ where 'a: 'b {
                     best_split.split_id = split_id;
 
                     let split_value = self.dataset.get_split_value(feat_id, split_id);
-                    let split_type = match self.dataset.feat_type(feat_id) {
+                    let split_type = match self.data.feat_type(feat_id) {
                         FeatType::LoCardCat => SplitType::LoCardCatEq,
                         FeatType::HiCardCat => SplitType::HiCardCatLt,
                         FeatType::Numerical => SplitType::NumLt,
@@ -386,25 +420,30 @@ where 'a: 'b {
         -0.5 * ((grad_sum * grad_sum) / (example_count as NumT + lambda))
     }
 
-    /// Use only the discretized gradient values to find leaf value, rather than letting the
-    /// objective function provide a slower/more accurate leaf value. Only makes sense for L2.
+    ///// Use only the discretized gradient values to find leaf value, rather than letting the
+    ///// objective function provide a slower/more accurate leaf value. Only makes sense for L2.
     //fn get_best_leaf_value(&self, grad_sum: NumT, example_count: u32) -> NumT {
     //    let lambda = self.ctx.config.reg_lambda;
     //    -grad_sum / (example_count as NumT + lambda) // should be neg
     //}
 
     fn predict_leaf_value(&mut self, n2s: &Node2Split) {
-        let targets = self.dataset.get_target();
+        let targets = self.data.get_target();
         let mask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
         let examples = &mut self.ctx.example_buffer;
-        examples.clear();
 
-        if n2s.compressed {
+        //if n2s.compressed {
+        //    let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
+        //    examples.extend(mask.index_iter_compr(&idxs));
+        //} else {
+        //    examples.extend(mask.index_iter());
+        //}
+
+        extend_examples!(n2s, self.dataset, examples;
+        if_compressed {
             let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
-            examples.extend(mask.index_iter_compr(&idxs));
-        } else {
-            examples.extend(mask.index_iter());
-        }
+            |idxs| mask.index_iter_compr(idxs)
+        }; or_else { mask.index_iter() });
 
         let value = self.objective.predict_leaf_value(targets, examples);
         self.tree.set_value(n2s.node_id, value);
@@ -414,31 +453,41 @@ where 'a: 'b {
 
     fn predict_child_leaf_values(&mut self, n2s: &Node2Split, split: &Split) {
         let feat_id = split.split_crit.feature_id;
-        let left_value;
-        let right_value;
 
-        let targets = self.dataset.get_target();
+        let targets = self.data.get_target();
         let pmask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
         let fmask = self.dataset.get_bitvec(feat_id, split.split_id);
         let examples = &mut self.ctx.example_buffer;
 
-        examples.clear();
-        if n2s.compressed {
-            let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
-            examples.extend(pmask.index_iter_and_compr(&fmask, &idxs));
-        } else {
-            examples.extend(pmask.index_iter_and(&fmask));
-        }
-        left_value = self.objective.predict_leaf_value(targets, examples);
+        //examples.clear();
+        //if n2s.compressed {
+        //    let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
+        //    examples.extend(pmask.index_iter_and_compr(&fmask, &idxs));
+        //} else {
+        //    examples.extend(pmask.index_iter_and(&fmask));
+        //}
 
-        examples.clear();
-        if n2s.compressed {
+        extend_examples!(n2s, self.dataset, examples;
+        if_compressed {
             let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
-            examples.extend(pmask.index_iter_andnot_compr(&fmask, &idxs));
-        } else {
-            examples.extend(pmask.index_iter_andnot(&fmask));
-        }
-        right_value = self.objective.predict_leaf_value(targets, examples);
+            |idxs| pmask.index_iter_and_compr(&fmask, idxs)
+        }; or_else { pmask.index_iter_and(&fmask) });
+        let left_value = self.objective.predict_leaf_value(targets, examples);
+
+        //examples.clear();
+        //if n2s.compressed {
+        //    let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
+        //    examples.extend(pmask.index_iter_andnot_compr(&fmask, &idxs));
+        //} else {
+        //    examples.extend(pmask.index_iter_andnot(&fmask));
+        //}
+
+        extend_examples!(n2s, self.dataset, examples;
+        if_compressed {
+            let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
+            |idxs| pmask.index_iter_andnot_compr(&fmask, idxs)
+        }; or_else { pmask.index_iter_andnot(&fmask) });
+        let right_value = self.objective.predict_leaf_value(targets, examples);
 
         let left_id = self.tree.left_child(n2s.node_id);
         let right_id = self.tree.right_child(n2s.node_id);
@@ -449,6 +498,7 @@ where 'a: 'b {
         debug!("N{:03} leaf value {} (max leaf)", right_id, right_value);
     }
 
+    #[allow(dead_code)]
     fn debug_print(&self, n2s: &Node2Split, split: &Split) -> bool {
         match self.ctx.config.discr_nbits {
             1 => self.debug_print_bsl::<BitSliceLayout1>(n2s, split),
@@ -465,8 +515,8 @@ where 'a: 'b {
         let feat_id = split.split_crit.feature_id;
         let split_id = split.split_id;
         let hist = self.ctx.hist_store.get_hist(n2s.hists_range, feat_id);
-        let feat_type = self.dataset.feat_type(feat_id);
-        let feat_data = self.dataset.get_feature(feat_id);
+        let feat_type = self.data.feat_type(feat_id);
+        let feat_data = self.data.get_feature(feat_id);
         let (pgrad, pcount) = (n2s.grad_sum, n2s.example_count);
         let (lgrad, lcount) = hist[split_id].unpack();
         let (rgrad, rcount) = (pgrad - lgrad, pcount - lcount);
@@ -483,8 +533,8 @@ where 'a: 'b {
             },
             FeatType::HiCardCat => {
                 let sc = split.split_crit.split_value as CatT;
-                let iter = (0..self.dataset.feat_card(feat_id))
-                    .filter(|&c| self.dataset.get_super_category(feat_id, c as NumT) <= sc)
+                let iter = (0..self.data.feat_card(feat_id))
+                    .filter(|&c| self.dataset.get_supercat(feat_id, c) <= sc)
                     .map(|c| format!("{}", c));
                 let mut val_str = String::new();
                 for x in iter {
@@ -511,7 +561,7 @@ where 'a: 'b {
         let pr = |i: usize, lr: &str| {
             println!(" - {:4}: {:15} {:15} {:15} {:15} {:>15} {:>5}", i, self.objective.gradients()[i],
             self.ctx.grad_discr[i], feat_data[i],
-            self.dataset.get_target()[i], self.objective.predictions()[i], lr);
+            self.data.get_target()[i], self.objective.predictions()[i], lr);
         };
 
         for i in pmask.index_iter_and_compr(&fmask, &pidxs) { pr(i, "L") } println!();

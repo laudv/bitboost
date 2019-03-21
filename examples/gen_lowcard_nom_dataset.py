@@ -83,8 +83,8 @@ def gen_output_for_columns(n, columns, max_depth):
             node_ids.append(2 * node_id + 2)
             node_ids.append(2 * node_id + 1)
         else:
-            leaf_value = 2 * np.random.rand() - 1
-            #leaf_value = random.choice(output_values1)
+            #leaf_value = 2 * np.random.rand() - 1
+            leaf_value = random.choice(output_values1)
             #leaf_value = random.choice(binary)
             print(" LEAF: node_id {} value {}".format(node_id, leaf_value))
             output[examples] = leaf_value
@@ -100,11 +100,11 @@ if __name__ == "__main__":
     seed = 14
     n = 100
     attr = 4
-    max_depth = 4
+    max_depth = 3
     card_range = [4, 5]
     compression = False
     test_frac = 0.0
-    ntrees = 2
+    ntrees = 1
 
     #for attr in [4, 8, 16, 32, 64, 128, 256]:
     compr_opt = "gzip" if compression else None

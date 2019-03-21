@@ -167,7 +167,6 @@ where T: Clone {
         for i in 0..self.free.len() {
             let r = self.free[i];
             if r.1 - r.0 >= len {
-                //info!("Reusing slice {:?} ({:?})! #free = {}", r, (r.0, r.0+len), self.free.len());
                 self.free.swap_remove(i);
 
                 // Re-initialize this, and return resized version

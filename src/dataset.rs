@@ -13,7 +13,7 @@ use crate::slice_store::{SliceRange, BitBlockStore, BitVecRef};
 use crate::binner::Binner;
 use crate::simd;
 
-const QUANTILE_EST_NBINS: usize = 1024;
+const QUANTILE_EST_NBINS: usize = 512;
 
 pub struct InnerDataset<'a> {
     rng: SmallRng,
@@ -89,12 +89,17 @@ impl <'a> InnerDataset<'a> {
         }
     }
 
+    fn initialize_supercats(&mut self) {
+        debug_assert!(self.supercats.is_empty(), "supercats not extracted to tree?");
+        self.supercats.resize(self.data.nfeatures(), Vec::new());
+    }
+
     fn update_locard_cat<I>(&mut self, _config: &Config, feat_id: usize, example_iter: I)
     where I: IntoIterator<Item = usize> + Copy
     {
         let data = self.data.get_feature(feat_id);
         let get_cat = |i| into_cat(data[i]) as usize;
-        self.used_nbins[feat_id] = self.data.feat_card(feat_id);
+        self.used_nbins[feat_id] = self.data.max_nbins(feat_id);
         debug_assert_eq!(self.used_nbins[feat_id], self.bitvecs[feat_id].len());
         Self::zero_bitvecs(&mut self.store, &self.bitvecs[feat_id]);
         Self::fill_bitvecs(&mut self.store, &self.bitvecs[feat_id], example_iter, get_cat);
@@ -104,9 +109,6 @@ impl <'a> InnerDataset<'a> {
                             grad: &[NumT], grad_bounds: (NumT, NumT))
     where I: IntoIterator<Item = usize> + Copy
     {
-        debug_assert!(self.supercats.is_empty(), "supercats not in tree?");
-        self.supercats.resize(self.data.nfeatures(), Vec::new());
-
         let data = self.data.get_feature(feat_id);
         let card = self.data.feat_card(feat_id);
 
@@ -145,7 +147,8 @@ impl <'a> InnerDataset<'a> {
         let supercard = split_weights.len();
         debug_assert!(supercard <= config.max_nbins);
 
-        dbg!(&split_weights);
+//        println!("split_weights feature {} [#card {} #weight {}]: {:?}", feat_id, card,
+//                 supercard, split_weights);
 
         // generate mapping: category -> super-category
         let mut supercats = vec![0; card];
@@ -179,8 +182,8 @@ impl <'a> InnerDataset<'a> {
         let mut binner = Binner::new(&mut bins, feat_bounds);
         let combiner = |bin: &mut NumT, grad_value: NumT| *bin += grad_value;
         let mut grad_weight_sum = 0.0;
-        for j in example_iter.into_iter() {
-            let (feat_value, grad_value) = (data[j], grad[j] + EPSILON); // apply weight transf?
+        for j in example_iter.into_iter() { // XXX apply transformation to grad weights?
+            let (feat_value, grad_value) = (data[j], grad[j].abs() + EPSILON);
             grad_weight_sum += grad_value;
             binner.insert(feat_value, grad_value, combiner);
         }
@@ -197,7 +200,8 @@ impl <'a> InnerDataset<'a> {
             split_candidates.push(binner.bin_representative(bin + 1));
         }
         let nsplit_candidates = split_candidates.len();
-        debug_assert!(nsplit_candidates <= config.max_nbins);
+        assert!(nsplit_candidates <= config.max_nbins);
+        assert!(nsplit_candidates > 0);
 
         // construct bitvecs
         let bitvecs = &self.bitvecs[feat_id][0..nsplit_candidates];
@@ -260,12 +264,14 @@ impl <'a> InnerDataset<'a> {
 pub struct Dataset<'a> {
     inner: InnerDataset<'a>,
     active_examples: Vec<usize>, // empty if example sampling disabled
+    root_examples: SliceRange,
 }
 
 impl <'a> Dataset<'a> {
     pub fn new(config: &Config, data: &'a Data) -> Self {
         let mut inner = InnerDataset::new(config, data);
         let mut active_examples = Vec::new();
+        let mut root_examples = (0, 0);
             
         if config.example_fraction < 1.0 {
             // bagging is enabled, choose examples
@@ -286,6 +292,7 @@ impl <'a> Dataset<'a> {
         Dataset {
             inner,
             active_examples,
+            root_examples,
         }
     }
 
@@ -296,6 +303,7 @@ impl <'a> Dataset<'a> {
 
     pub fn update(&mut self, config: &Config, grad: &[NumT], grad_bounds: (NumT, NumT)) {
         self.inner.sample_features();
+        self.inner.initialize_supercats();
 
         // Example sampling
         if self.example_sampling_enabled() {
@@ -345,12 +353,23 @@ impl <'a> Dataset<'a> {
     pub fn example_sampling_enabled(&self) -> bool { !self.active_examples.is_empty() }
     pub fn nactive_features(&self) -> usize { self.inner.active_features.len() }
     pub fn nactive_examples(&self) -> usize { self.inner.nactive_examples }
+    pub fn active_features(&self) -> &[usize] { &self.inner.active_features }
+
+    pub fn map_index(&self, local_index: usize) -> usize { // bagged index -> global dataset index
+        debug_assert!(self.example_sampling_enabled());
+        self.active_examples[local_index]
+    }
+
+    //pub fn inactive_examples_iter<'b>(&'b self) -> impl Iterator<Item=usize> + 'b {
+    //    assert!(self.example_sampling_enabled());
+    //    InactiveExampleIter {
+    //}
 
     pub fn get_nbins(&self, feat_id: usize) -> usize {
         self.inner.used_nbins[feat_id]
     }
 
-    pub fn get_bitvecs(&self, feat_id: usize, split_id: usize) -> BitVecRef {
+    pub fn get_bitvec(&self, feat_id: usize, split_id: usize) -> BitVecRef {
         let range = self.inner.bitvecs[feat_id][split_id];
         self.inner.store.get_bitvec(range)
     }
@@ -361,6 +380,10 @@ impl <'a> Dataset<'a> {
             FeatType::HiCardCat => split_id as NumT, // == super-category
             FeatType::Numerical => self.inner.split_candidates[feat_id][split_id],
         }
+    }
+
+    pub fn get_supercat(&self, feat_id: usize, split_id: usize) -> CatT {
+        self.inner.supercats[feat_id][split_id]
     }
 
     pub fn extract_supercats(&mut self) -> Vec<Vec<CatT>> {
@@ -399,6 +422,27 @@ impl <'a> IntoIterator for &'a SliceIntoIter<'a> {
     type Item = usize;
     type IntoIter = Cloned<Iter<'a, usize>>;
     fn into_iter(self) -> Self::IntoIter { self.0.iter().cloned() }
+}
+
+pub struct InactiveExampleIter<'b> {
+    active_examples: &'b [usize],
+    index: usize,
+    n: usize,
+}
+
+impl <'b> Iterator for InactiveExampleIter<'b> {
+    type Item = usize;
+    fn next(&mut self) -> Option<usize> {
+        while self.active_examples.get(0).map_or(false, |&i| i == self.index) {
+            self.active_examples = &self.active_examples[1..];
+            self.index += 1;
+        }
+        if self.index < self.n {
+            let tmp = self.index;
+            self.index += 1;
+            Some(tmp)
+        } else { None }
+    }
 }
 
 fn sample(rng: &mut SmallRng, n: usize, buffer: &mut [usize], sort: bool) {
@@ -631,5 +675,30 @@ mod test {
             }
             println!();
         }
+    }
+
+    #[test]
+    fn inactive_examples_iter() {
+        let v = vec![2,3,5,6,9];
+        let iter = InactiveExampleIter {
+            active_examples: &v,
+            index: 0,
+            n: 11
+        };
+        assert_eq!(&iter.collect::<Vec<usize>>(), &[0,1,4,7,8,10]);
+
+        let iter = InactiveExampleIter {
+            active_examples: &v,
+            index: 2,
+            n: 5
+        };
+        assert_eq!(&iter.collect::<Vec<usize>>(), &[4]);
+
+        let iter = InactiveExampleIter {
+            active_examples: &v,
+            index: 1,
+            n: 9
+        };
+        assert_eq!(&iter.collect::<Vec<usize>>(), &[1,4,7,8]);
     }
 }

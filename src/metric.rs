@@ -36,6 +36,7 @@ pub fn metric_from_name(name: &str) -> Option<Box<dyn Metric>> {
         "rmse" => Some(Box::new(Rmse::new())),
         "binaryloss" | "binary_loss" => Some(Box::new(BinaryLoss::new())),
         "binaryerror" | "binary_error" => Some(Box::new(BinaryError::new())),
+        "binaryerror01" | "binary_error01" => Some(Box::new(BinaryError01::new())),
         _ => None
     }
 }
@@ -112,4 +113,21 @@ impl_metric!(BinaryError, eval_one: |_, t: NumT, p: NumT| {
 
 impl BinaryError {
     pub fn new() -> BinaryError { BinaryError {} }
+}
+
+// ------------------------------------------------------------------------------------------------
+
+pub struct BinaryError01 {} // use for binary problems with l1/l2 -> choose closest to 0,1 instead of -1, 1
+impl_metric!(BinaryError01, eval_one: |_, t: NumT, p: NumT| {
+    if t < 0.5 {
+        if p < 0.5 { 0.0 }
+        else       { 1.0 }
+    } else {
+        if p < 0.5 { 1.0 }
+        else       { 0.0 }
+    }
+});
+
+impl BinaryError01 {
+    pub fn new() -> BinaryError01 { BinaryError01 {} }
 }
