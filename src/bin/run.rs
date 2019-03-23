@@ -9,6 +9,7 @@ use spdyboost::config::Config;
 use spdyboost::data::Data;
 use spdyboost::dataset::Dataset;
 use spdyboost::objective::{Objective, objective_from_name};
+use spdyboost::tree::{AdditiveTree, Tree};
 use spdyboost::tree_learner::{TreeLearner, TreeLearnerContext};
 use spdyboost::metric::{Metric, metrics_from_names};
 use spdyboost::boost::Booster;
@@ -18,9 +19,12 @@ pub fn main() {
 
     let args: Vec<String> = env::args().collect();
     let res = match args.get(1).map(|x| x.as_str()) {
-        Some("tree")  => single_tree(&args[2..]),
-        Some("boost") => boost(&args[2..]),
-        _             => boost(&args[1..])
+        Some("tree")  => single_tree(&args[2..]).map(|_| ()),
+        Some("boost") => boost(&args[2..]).map(|_| ()),
+        Some("boost_and_predict") => {
+            boost(&args[2..]).map(|_| ())
+        },
+        _ => boost(&args[1..]).map(|_| ())
     };
 
     match res {
@@ -33,13 +37,16 @@ fn load_data(config: &Config) -> Result<(Data, Option<Data>), String> {
     let (train_data_res, test_data_res): (Result<Data, String>, Option<Result<Data, String>>) = thread::scope(|s| {
         let t1 = s.spawn(move |_| {
             let r = Data::from_csv_path(&config, config.train.as_str());
-            println!("[   ] finished loading training data");
+            if r.is_ok() { println!("[   ] finished loading training data"); }
+            else {         println!("[   ] failed loading training data: '{}'", config.train); }
             r
         });
         let test_data_res = if !config.test.is_empty() {
-            let r = Some(Data::from_csv_path(&config, config.test.as_str()));
+            let r = Data::from_csv_path(&config, config.test.as_str());
             println!("[   ] finished loading test data");
-            r
+            if r.is_ok() { println!("[   ] finished loading test data"); }
+            else {         println!("[   ] failed loading test data: '{}'", config.train); }
+            Some(r)
         } else { None };
         let train_data_res = t1.join().unwrap();
 
@@ -55,7 +62,7 @@ fn load_data(config: &Config) -> Result<(Data, Option<Data>), String> {
     Ok((train_data, test_data))
 }
 
-fn single_tree(args: &[String]) -> Result<(), String> {
+fn single_tree(args: &[String]) -> Result<Tree, String> {
     let config = Config::parse(args.iter().map(|x| x.as_str()))?;
     let (train_data, test_data) = load_data(&config)?;
     let target = train_data.get_target();
@@ -78,10 +85,10 @@ fn single_tree(args: &[String]) -> Result<(), String> {
     summary(&config, |d| tree.predict(d), &train_data, test_data.as_ref(),
             objective.as_ref(), &ms);
 
-    Ok(())
+    Ok(tree)
 }
 
-fn boost(args: &[String]) -> Result<(), String> {
+fn boost(args: &[String]) -> Result<AdditiveTree, String> {
     let config = Config::parse(args.iter().map(|x| x.as_str()))?;
     let (train_data, test_data) = load_data(&config)?;
 
@@ -94,7 +101,7 @@ fn boost(args: &[String]) -> Result<(), String> {
     summary(&config, |d| model.predict(d), &train_data, test_data.as_ref(),
             objective.as_ref(), &ms);
 
-    Ok(())
+    Ok(model)
 }
 
 fn summary<F>(config: &Config, model: F, train: &Data, test: Option<&Data>,
@@ -107,7 +114,7 @@ where F: Fn(&Data) -> Vec<NumT>
     if config.prediction_len > 0 {
         println!();
         println!("[   ] train predictions (first {})", config.prediction_len);
-        print_predictions(train.get_target(), &train_pred, config.prediction_len);
+        print_predictions2(train.get_target(), &train_pred, objective.predictions(), config.prediction_len);
 
         if let Some((test_data, ref test_pred)) = test_pred {
             println!();
@@ -137,6 +144,16 @@ fn print_predictions(target: &[NumT], prediction: &[NumT], npreds: usize) {
     println!("{:4}  {:>15} {:>15} {:>15}", "", "target", "prediction", "error");
     for (i, (x, y)) in target.iter().zip(prediction).enumerate().take(npreds) {
         println!("{:4}: {:15} {:15} {:15.2e}", i, x, y, (x-y).abs());
+    }
+}
+
+#[allow(dead_code)]
+fn print_predictions2(target: &[NumT], prediction: &[NumT], objective_preds: &[NumT],
+                      npreds: usize)
+{
+    println!("{:4}  {:>15} {:>15} {:>15} {:>15}", "", "target", "prediction", "obj.pred.", "obj.err.");
+    for (i, ((t, x1), x2)) in target.iter().zip(prediction).zip(objective_preds).enumerate().take(npreds) {
+        println!("{:4}: {:15} {:15} {:15} {:15.2e}", i, t, x1, x2, (x1-x2).abs());
     }
 }
 

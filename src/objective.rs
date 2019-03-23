@@ -1,4 +1,4 @@
-use crate::{NumT, POS_INF, NEG_INF};
+use crate::{NumT, EPSILON, POS_INF, NEG_INF};
 use crate::config::Config;
 use crate::binner::Binner;
 
@@ -30,6 +30,10 @@ pub trait Objective {
     /// Given a selection of examples, predict the optimal leaf value. This should also update the
     /// predictions of the objective.
     fn predict_leaf_value(&mut self, targets: &[NumT], examples: &[usize]) -> NumT;
+
+    /// Update the prediction of an out-of-bag example. In-bag examples are updated by
+    /// `predict_leaf_value`.
+    fn update_out_of_bag_prediction(&mut self, i: usize, value: NumT);
 }
 
 pub fn objective_from_name(name: &str, _config: &Config) -> Option<Box<dyn Objective>> {
@@ -49,6 +53,12 @@ macro_rules! impl_simple_obj_methods {
         fn predictions(&self) -> &[NumT] { &self.predictions }
         fn bounds(&self) -> (NumT, NumT) { $bounds(self) }
         fn bias(&self) -> NumT           { self.bias }
+
+        fn update_out_of_bag_prediction(&mut self, i: usize, value: NumT) {
+            //println!("update_pred {:4} -> {:.3} out_of_bag", i, value);
+            safety_check!(self.predictions[i].is_finite());
+            self.predictions[i] += value;
+        }
     }
 }
 
@@ -91,7 +101,9 @@ macro_rules! objective_struct {
             fn update_predictions(&mut self, examples: &[usize], value: NumT) -> NumT {
                 let value = self.learning_rate * value;
                 for &i in examples {
+                    //println!("update_pred {:4} -> {:.3} predict_leaf_value", i, value);
                     self.predictions[i] += value;
+                    safety_check!(self.predictions[i].is_finite());
                 }
                 value
             }
@@ -375,7 +387,7 @@ impl Objective for Binary {
 
     fn predict_leaf_value(&mut self, _: &[NumT], examples: &[usize]) -> NumT {
         let mut num = 0.0;
-        let mut den = 0.0;
+        let mut den = EPSILON;
         for &i in examples {
             let y = -self.gradients[i];
             let yabs = y.abs();

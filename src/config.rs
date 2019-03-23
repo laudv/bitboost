@@ -48,13 +48,16 @@ macro_rules! parse_config {
 fn parse_fromstr<T: FromStr>(value: &str) -> Option<T> { value.parse::<T>().ok() }
 fn parse_vec<T: FromStr>(value: &str) -> Option<Vec<T>> {
     let mut res = Vec::new();
-    for v in value.split(',').map(|s| s.trim()) {
-        match v.parse::<T>() {
-           Ok(x)  => res.push(x),
-           Err(_) => return None,
+    if value.is_empty() { Some(res) }
+    else {
+        for v in value.split(',').map(|s| s.trim()) {
+            match v.parse::<T>() {
+               Ok(x)  => res.push(x),
+               Err(_) => return None,
+            }
         }
+        Some(res)
     }
-    Some(res)
 }
 
 
@@ -98,7 +101,6 @@ parse_config!(Config,
     sample_freq: usize = 1,                         parse_fromstr;
 
     prediction_len: usize = 0,                      parse_fromstr;
-    sort_examples: bool = true,                     parse_fromstr;
 );
 
 

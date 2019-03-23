@@ -54,13 +54,13 @@ impl <'a> Booster<'a> {
         assert!(self.iter_count == 0);
         self.start = Instant::now();
         let target = self.data.get_target();
-        let mut r = TreeLearnerContext::new(self.config, self.data);
+        let mut ctx = TreeLearnerContext::new(self.config, self.data);
 
         self.objective.initialize(self.config, target);
         self.ensemble.set_bias(self.objective.bias());
 
         for _ in 0..self.config.niterations {
-            self.train_one_iter(&mut r);
+            self.train_one_iter(&mut ctx);
         }
 
         self.ensemble
@@ -82,8 +82,8 @@ impl <'a> Booster<'a> {
         let seconds = el.as_secs() as f32 + el.subsec_micros() as f32 * 1e-6;
         println!("[{:3}] timings: objective {:5.1}, dataset {:5.1}, tree {:5.1} ms, total {:.3} s",
                  self.iter_count, ot * 1000.0, dt * 1000.0, tt * 1000.0, seconds);
-        let grad_bounds = self.objective.bounds();
-        println!("[   ] gradient bounds ({}, {})", grad_bounds.0, grad_bounds.1);
+        //let grad_bounds = self.objective.bounds();
+        //println!("[   ] gradient bounds ({}, {})", grad_bounds.0, grad_bounds.1);
 
         let run_metrics = !self.metrics.is_empty()
             && self.config.metric_frequency > 0

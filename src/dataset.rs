@@ -18,25 +18,26 @@ const QUANTILE_EST_NBINS: usize = 512;
 pub struct InnerDataset<'a> {
     rng: SmallRng,
     data: &'a Data,
-    useful_features: Vec<usize>,
-    active_features: Vec<usize>,
-    nactive_examples: usize,
+    useful_features: Vec<usize>, // == first `nactive_features` are 'active'
+    nactive_features: usize,
+    nactive_examples: usize,     // == nexamples in bag
     store: BitBlockStore,
     bitvecs: Vec<Vec<SliceRange>>,
     supercats: Vec<Vec<CatT>>,
     split_candidates: Vec<Vec<NumT>>,
     used_nbins: Vec<usize>,
+    has_non_locard_cat_features: bool,
 }
 
 impl <'a> InnerDataset<'a> {
     fn new(config: &Config, data: &'a Data) -> Self {
         let rng = SmallRng::seed_from_u64(config.random_seed);
+        let mut has_non_locard_cat_features = false;
         let mut useful_features = Vec::new();
         let mut store = BitBlockStore::new(2048);
 
         let nfeatures = data.nfeatures();
         let nexamples = data.nexamples();
-        let nactive_features = (nfeatures as NumT * config.feature_fraction).round() as usize;
         let nactive_examples = (nexamples as NumT * config.example_fraction).round() as usize;
 
         let mut bitvecs      = vec![Vec::new(); nfeatures];
@@ -49,44 +50,47 @@ impl <'a> InnerDataset<'a> {
             let max_nbins = data.max_nbins(feat_id);
             if max_nbins == 0 { continue; } // not a useful feature, only 1 value
 
+            let feat_bounds = data.feat_limits(feat_id);
+            if feat_bounds.0 == feat_bounds.1 { continue; } // not a useful feature, only 1 value
+
+            has_non_locard_cat_features |= data.feat_type(feat_id) != FeatType::LoCardCat;
+
             useful_features.push(feat_id);
             bitvecs[feat_id] = (0..max_nbins)
                 .map(|_| store.alloc_zero_bits(nactive_examples))
                 .collect();
         }
 
-        // if feature sampling is enabled, then feature_fraction is filled at `update`
-        // else, just take all useful features
-        let active_features = if config.feature_fraction < 1.0 { vec![0; nactive_features] }
-                              else { useful_features.clone() };
+        let nuseful = useful_features.len();
+        let nactive_features = (nuseful as NumT * config.feature_fraction).round() as usize;
+
         Self {
             rng,
             data,
             useful_features,
-            active_features,
+            nactive_features,
             nactive_examples,
             store,
             bitvecs,
             supercats,
             split_candidates,
             used_nbins,
+            has_non_locard_cat_features,
         }
     }
 
     fn feature_sampling_enabled(&self) -> bool {
-        self.useful_features.len() > self.active_features.len()
+        self.useful_features.len() > self.nactive_features
     }
 
     fn sample_features(&mut self) {
         if self.feature_sampling_enabled() {
-            let n = self.useful_features.len();
-            reservoir_sample(&mut self.rng, n, &mut self.active_features, true);
-
-            // we sampled from indexes into `useful_features`, now translate to global features.
-            for i in self.active_features.iter_mut() {
-                *i = self.useful_features[*i];
-            }
+            shuffle_first_k(&mut self.rng, self.nactive_features, &mut self.useful_features);
         }
+    }
+
+    fn active_features<'b>(&'b self) -> &'b [usize] {
+        &self.useful_features[0..self.nactive_features]
     }
 
     fn initialize_supercats(&mut self) {
@@ -263,21 +267,18 @@ impl <'a> InnerDataset<'a> {
 
 pub struct Dataset<'a> {
     inner: InnerDataset<'a>,
-    active_examples: Vec<usize>, // empty if example sampling disabled
-    root_examples: SliceRange,
+    index_buffer: Vec<usize>, // 0..k examples are active examples, empty if ex.sampling disabled
+    update_count: usize,
 }
 
 impl <'a> Dataset<'a> {
     pub fn new(config: &Config, data: &'a Data) -> Self {
         let mut inner = InnerDataset::new(config, data);
-        let mut active_examples = Vec::new();
-        let mut root_examples = (0, 0);
+        let mut index_buffer = Vec::new();
             
         if config.example_fraction < 1.0 {
             // bagging is enabled, choose examples
-            active_examples.resize(inner.nactive_examples, 0);
-            sample(&mut inner.rng, inner.data.nexamples(), &mut active_examples,
-                   config.sort_examples);
+            index_buffer = (0..inner.data.nexamples()).collect();
         } else {
             // no bagging, update locard-cat once and reuse throughout boosting
             let all_examples = RangeIntoIter(inner.data.nexamples());
@@ -291,27 +292,43 @@ impl <'a> Dataset<'a> {
 
         Dataset {
             inner,
-            active_examples,
-            root_examples,
+            index_buffer,
+            update_count: 0,
         }
     }
 
-    fn sample_examples(&mut self, config: &Config) {
-        sample(&mut self.inner.rng, self.inner.data.nexamples(), &mut self.active_examples,
-               config.sort_examples);
+    fn sample_examples(&mut self) {
+        let k = self.nactive_examples();
+        shuffle_first_k(&mut self.inner.rng, k, &mut self.index_buffer);
+    }
+
+    fn active_examples_noborrow<'b>(index_buffer: &'b [usize], nactive_examples: usize) -> &'b [usize] {
+        &index_buffer[0..nactive_examples] // does not borrow `self`
+    }
+
+    fn active_examples<'b>(&'b self) -> &'b [usize] { // borrows `self`
+        Self::active_examples_noborrow(&self.index_buffer, self.nactive_examples())
     }
 
     pub fn update(&mut self, config: &Config, grad: &[NumT], grad_bounds: (NumT, NumT)) {
-        self.inner.sample_features();
+        self.update_count += 1;
         self.inner.initialize_supercats();
+
+        // only fully update every `config.sample_freq` updates
+        if config.sample_freq == 0 || self.update_count % config.sample_freq != 0 { return; }
+
+        self.inner.sample_features();
 
         // Example sampling
         if self.example_sampling_enabled() {
-            self.sample_examples(config);
+            self.sample_examples();
 
-            let examples = SliceIntoIter(&self.active_examples);
-            for u in 0..self.inner.active_features.len() {
-                let feat_id = self.inner.active_features[u];
+            let (buf, nactive) = (&self.index_buffer, self.nactive_examples());
+            let active_examples = Self::active_examples_noborrow(buf, nactive);
+            let examples = SliceIntoIter(active_examples);
+
+            for u in 0..self.nactive_features() {
+                let feat_id = self.inner.useful_features[u]; // [0..nactive_features] are active
                 match self.inner.data.feat_type(feat_id) {
                     FeatType::LoCardCat => {
                         self.inner.update_locard_cat(config, feat_id, &examples);
@@ -327,11 +344,11 @@ impl <'a> Dataset<'a> {
             }
         }
         
-        // No example sampling
-        else {
+        // No example sampling -- only if there are non-locard categorical features
+        else if self.inner.has_non_locard_cat_features {
             let examples = RangeIntoIter(self.inner.data.nexamples());
-            for u in 0..self.inner.active_features.len() {
-                let feat_id = self.inner.active_features[u];
+            for u in 0..self.nactive_features() {
+                let feat_id = self.inner.useful_features[u]; // [0..nactive_features] are active
 
                 match self.inner.data.feat_type(feat_id) {
                     FeatType::LoCardCat => {}, // can reuse bitvecs from initialization
@@ -350,20 +367,33 @@ impl <'a> Dataset<'a> {
     // ------------
 
     pub fn feature_sampling_enabled(&self) -> bool { self.inner.feature_sampling_enabled() }
-    pub fn example_sampling_enabled(&self) -> bool { !self.active_examples.is_empty() }
-    pub fn nactive_features(&self) -> usize { self.inner.active_features.len() }
+    pub fn example_sampling_enabled(&self) -> bool { !self.index_buffer.is_empty() }
+    pub fn nactive_features(&self) -> usize { self.inner.nactive_features }
     pub fn nactive_examples(&self) -> usize { self.inner.nactive_examples }
-    pub fn active_features(&self) -> &[usize] { &self.inner.active_features }
+    pub fn active_features(&self) -> &[usize] { &self.inner.active_features() }
 
-    pub fn map_index(&self, local_index: usize) -> usize { // bagged index -> global dataset index
-        debug_assert!(self.example_sampling_enabled());
-        self.active_examples[local_index]
+    pub fn map_index(&self, local_index: usize) -> usize {
+        debug_assert!(self.example_sampling_enabled()); // bagged index -> global data index
+        self.active_examples()[local_index]
     }
 
-    //pub fn inactive_examples_iter<'b>(&'b self) -> impl Iterator<Item=usize> + 'b {
-    //    assert!(self.example_sampling_enabled());
-    //    InactiveExampleIter {
-    //}
+    pub fn active_examples_iter<F>(&self, mut body: F)
+    where F: FnMut(usize, usize) { // local index, global index
+        if self.example_sampling_enabled() {
+            for (i, &j) in self.active_examples().iter().enumerate() { (body)(i, j); }
+        } else {
+            for i in 0..self.nactive_examples() { (body)(i, i); }
+        }
+    }
+
+    pub fn inactive_examples_iter<'b>(&'b self) -> impl Iterator<Item=usize> + 'b {
+        assert!(self.example_sampling_enabled());
+        InactiveExampleIter {
+            active_examples: &self.active_examples(),
+            index: 0,
+            n: self.inner.data.nexamples(),
+        }
+    }
 
     pub fn get_nbins(&self, feat_id: usize) -> usize {
         self.inner.used_nbins[feat_id]
@@ -445,12 +475,24 @@ impl <'b> Iterator for InactiveExampleIter<'b> {
     }
 }
 
-fn sample(rng: &mut SmallRng, n: usize, buffer: &mut [usize], sort: bool) {
+#[allow(dead_code)]
+fn sample_replacement(rng: &mut SmallRng, n: usize, buffer: &mut [usize]) {
     buffer.iter_mut().for_each(|i| *i = rng.gen_range(0, n));
-    if sort { buffer.sort_unstable(); }
+    buffer.sort_unstable();
 }
 
-fn reservoir_sample(rng: &mut SmallRng, n: usize, buffer: &mut [usize], sort: bool) {
+fn shuffle_first_k(rng: &mut SmallRng, k: usize, buffer: &mut [usize]) {
+    let n = buffer.len();
+    for i in 0..k {
+        let j = rng.gen_range(i, n);
+        buffer.swap(i, j);
+    }
+    // buffer[0..k] is random sample w/o replacement from 0..n
+    buffer[0..k].sort_unstable();
+}
+
+#[allow(dead_code)]
+fn reservoir_sample(rng: &mut SmallRng, n: usize, buffer: &mut [usize]) {
     let k = buffer.len();
     debug_assert!(n > k);
     for i in 0..n {
@@ -460,7 +502,7 @@ fn reservoir_sample(rng: &mut SmallRng, n: usize, buffer: &mut [usize], sort: bo
             if r < k { buffer[r] = i; }
         }
     }
-    if sort { buffer.sort_unstable(); }
+    buffer.sort_unstable();
 }
 
 
@@ -502,11 +544,11 @@ mod test {
 
         assert_eq!(dataset.nactive_features(), 2);
         assert_eq!(dataset.nactive_examples(), 6);
-        assert_eq!(&dataset.inner.active_features, &[1, 2]); // dependent on seed
-        assert_eq!(&dataset.active_examples, &[0, 1, 2, 2, 3, 5]); // depends on seed
+        assert_eq!(dataset.active_features(), &[0, 1]); // dependent on seed
+        assert_eq!(dataset.active_examples(), &[0, 1, 3, 5, 6, 7]); // depends on seed
 
         let ranges = &dataset.inner.bitvecs[1]; // locard-cat feature
-        let values = vec![0b000001, 0b011110, 0b100000];
+        let values = vec![0b100001, 0b110, 0b11000];
         for i in 0..3 {
             let bitvec = dataset.inner.store.get_bitvec(ranges[i]);
             let x = bitvec.cast::<u32>()[0];

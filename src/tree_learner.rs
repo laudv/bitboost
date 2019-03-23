@@ -6,7 +6,7 @@ use log::{warn, debug};
 use crate::{NumT, CatT};
 use crate::config::Config;
 use crate::data::{Data, FeatType};
-use crate::dataset::Dataset;
+use crate::dataset::{Dataset};
 use crate::tree::{Tree, SplitType, SplitCrit};
 use crate::slice_store::{SliceRange, HistStore, BitBlockStore, BitVecRef};
 use crate::slice_store::{BitSliceLayout, BitSliceLayout1, BitSliceLayout2};
@@ -121,7 +121,6 @@ pub struct TreeLearnerContext<'a> {
 
     n2s_stack: Vec<Node2Split>,
     example_buffer: Vec<usize>,
-    grad_discr: Vec<NumT>, // same values as in root bitslice (discretized gradients)
 }
 
 impl <'a> TreeLearnerContext<'a> {
@@ -139,7 +138,6 @@ impl <'a> TreeLearnerContext<'a> {
 
             n2s_stack: Vec::new(),
             example_buffer: Vec::new(), // used for leaf value predictions
-            grad_discr: Vec::new(),
         }
     }
 
@@ -149,7 +147,6 @@ impl <'a> TreeLearnerContext<'a> {
         self.mask_store.reset();
         self.grad_store.reset();
         self.n2s_stack.clear();
-        self.grad_discr.clear();
     }
 }
 
@@ -178,7 +175,8 @@ macro_rules! dispatch {
 /// Matrix of dynamic choises to make, depending on:
 ///  - is mask compressed: use *_compr or not
 ///  - is example_sampling_enabled: map local bagged indexes to global dataset indexes
-#[allow(unused_macros)]
+/// This pattern is reused:
+///  - both for leaf value prediction of leaf and leaf children of node
 macro_rules! extend_examples {
     ($n2s:ident, $ds:expr, $examples:ident;
      if_compressed { let idxs = $idxs:expr; $iter_fn:expr };
@@ -193,12 +191,15 @@ macro_rules! extend_examples {
             let iter = $iter_uncompr;
             extend_examples!(@aux $ds, $examples, iter);
         }
+        safety_check!(!$examples.is_empty());
     }};
     (@aux $ds:expr, $examples:ident, $iter:ident) =>
     {{
         if $ds.example_sampling_enabled() {
-            println!("BAGGING!!!!!");
-            for i in $iter { $examples.push($ds.map_index(i)); }
+            for i in $iter {
+                let j = $ds.map_index(i);
+                $examples.push(j);
+            }
         } else {
             $examples.extend($iter);
         }
@@ -274,6 +275,10 @@ where 'a: 'b {
         }
         
         if self.tree.nnodes() == 1 { warn!("tree with single root node"); }
+
+        // if bagging enabled, then update predictions for the out-of-bag examples
+        self.predict_out_of_bag_examples();
+
         self.tree // can have only a single root node
     }
 
@@ -432,6 +437,8 @@ where 'a: 'b {
         let mask = self.ctx.mask_store.get_bitvec(n2s.mask_range);
         let examples = &mut self.ctx.example_buffer;
 
+        if n2s.node_id == 0 { warn!("prediction root node value"); }
+
         //if n2s.compressed {
         //    let idxs = self.ctx.idx_store.get_bitvec(n2s.idx_range);
         //    examples.extend(mask.index_iter_compr(&idxs));
@@ -498,6 +505,19 @@ where 'a: 'b {
         debug!("N{:03} leaf value {} (max leaf)", right_id, right_value);
     }
 
+    fn predict_out_of_bag_examples(&mut self) {
+        // TODO if root example sampling...
+        // TODO safety_check! macro that can be disabled? but also possible in release?
+
+        if !self.dataset.example_sampling_enabled() { return; }
+        let data = self.dataset.data();
+
+        for i in self.dataset.inactive_examples_iter() {
+            let prediction = self.tree.predict_single(data, i);
+            self.objective.update_out_of_bag_prediction(i, prediction);
+        }
+    }
+
     #[allow(dead_code)]
     fn debug_print(&self, n2s: &Node2Split, split: &Split) -> bool {
         match self.ctx.config.discr_nbits {
@@ -560,7 +580,7 @@ where 'a: 'b {
 
         let pr = |i: usize, lr: &str| {
             println!(" - {:4}: {:15} {:15} {:15} {:15} {:>15} {:>5}", i, self.objective.gradients()[i],
-            self.ctx.grad_discr[i], feat_data[i],
+            /*self.ctx.grad_discr[i]*/ "DISCR.GRAD", feat_data[i],
             self.data.get_target()[i], self.objective.predictions()[i], lr);
         };
 
@@ -584,23 +604,22 @@ macro_rules! get_root_n2s {
         fn $f(this: &mut TreeLearner) -> Node2Split {
             let bounds = this.objective.bounds();
             let nexamples  = this.dataset.nactive_examples();
+            let gradients  = this.objective.gradients();
             let grad_range = this.ctx.grad_store.alloc_zero_bitslice::<$bsl>(nexamples);
             let mask_range = this.ctx.mask_store.alloc_one_bits(nexamples);
             let nblocks    = this.ctx.mask_store.get_bitvec(mask_range).block_len::<u32>();
             let idx_range  = this.ctx.idx_store.alloc_from_iter::<u32, _>(nblocks, 0..nblocks as u32);
-            let grad_discr = &mut this.ctx.grad_discr;
+
+            assert!(nexamples < u32::max_value() as usize);
 
             // put gradients in bitslice
             let mut grad_sum = 0;
             let mut grad_slice = this.ctx.grad_store.get_bitslice_mut::<$bsl>(grad_range);
-            for (i, &v) in this.objective.gradients().iter().enumerate() {
+            this.dataset.active_examples_iter(|i, j| {
+                let v = gradients[j];
                 let x = grad_slice.set_scaled_value(i, v, bounds);
-                grad_discr.push($bsl::linproj(x as NumT, 1.0, bounds));
                 grad_sum += x as u64;
-            }
-
-            assert!(grad_discr.len() == nexamples);
-            assert!(nexamples < u32::max_value() as usize);
+            });
 
             let mut n2s = Node2Split::new(0, &mut this.ctx.hist_store);
             n2s.idx_range     = idx_range;

@@ -83,6 +83,7 @@ impl Tree {
 
     pub fn max_depth(&self) -> usize { self.max_depth }
     pub fn set_value(&mut self, node_id: usize, value: NumT) {
+        safety_check!(value.is_finite());
         self.node_values[node_id] = value;
     }
 
@@ -145,14 +146,18 @@ impl Tree {
         self.supercats = supercats;
     }
 
+    pub fn predict_single(&self, data: &Data, i: usize) -> NumT {
+       let leaf_id = self.predict_leaf_id_of_example(data, i);
+       let leaf_value = self.node_values[leaf_id];
+       self.shrinkage * (leaf_value + self.bias)
+    }
+
     /// Predict and store the result as defined by `f` in `predict_buf`.
     pub fn predict_and<F>(&self, data: &Data, predict_buf: &mut [NumT], f: F)
     where F: Fn(NumT, &mut NumT) {
         assert_eq!(predict_buf.len(), data.nexamples());
         for i in 0..data.nexamples() {
-            let leaf_id = self.predict_leaf_id_of_example(data, i);
-            let leaf_value = self.node_values[leaf_id];
-            let prediction = self.shrinkage * (leaf_value + self.bias);
+            let prediction = self.predict_single(data, i);
             //print!("prediction[{:4}]: {:+.4}", i, predict_buf[i]);
             f(prediction, &mut predict_buf[i]);
             //println!(" -> {:+.4} (tree_pred={:+.4} target={:+.4})", predict_buf[i],

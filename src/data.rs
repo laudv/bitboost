@@ -27,7 +27,8 @@ pub struct Data {
 }
 
 impl Data {
-    pub fn from_csv_path<P: AsRef<Path>>(config: &Config, path: P) -> Result<Data, String> {
+    pub fn from_csv_path<P>(config: &Config, path: P) -> Result<Data, String>
+    where P: AsRef<Path> {
         let reader = File::open(path).map_err(|err| format!("path error: {}", err))?;
         Data::from_csv_reader(config, reader)
     }
