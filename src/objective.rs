@@ -354,10 +354,12 @@ impl Objective for Huber {
 
 // - Binary log loss ------------------------------------------------------------------------------
 
-objective_struct!(Binary { });
+objective_struct!(Binary {
+    bound: NumT = 1.25
+});
 
 impl Objective for Binary {
-    impl_simple_obj_methods!(Binary, |_: &Binary| (-1.25, 1.25));
+    impl_simple_obj_methods!(Binary, |this: &Binary| (-this.bound, this.bound));
 
     fn initialize(&mut self, config: &Config, targets: &[NumT]) {
         debug_assert!(targets.iter().all(|&t| t == 0.0 || t == 1.0));
@@ -369,6 +371,7 @@ impl Objective for Binary {
         let prior = 0.5 * ((1.0 + avg) / (1.0 - avg)).ln();
 
         self.initialize_base(config, n, prior);
+        self.bound = config.binary_gradient_bound;
 
         println!("[   ] binary objective: pos {}, neg {}, prior {}", npos, nneg, prior);
     }

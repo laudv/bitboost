@@ -46,7 +46,7 @@ pub struct Tree {
 }
 
 impl Tree {
-    pub fn new(max_depth: usize) -> Tree {
+    pub fn new(max_depth: usize, supercats: Vec<Vec<CatT>>) -> Tree {
         assert!(max_depth > 0);
         let mut tree = Tree {
             ninternal: 0, // the root is the only leaf
@@ -57,7 +57,7 @@ impl Tree {
             shrinkage: 1.0,
             bias: 0.0,
 
-            supercats: Vec::new(),
+            supercats,
         };
         let nnodes = tree.max_nnodes();
 
@@ -101,6 +101,10 @@ impl Tree {
         self.ninternal += 1;
     }
 
+    pub fn get_supercat(&self, feat_id: usize, split_id: usize) -> CatT {
+        self.supercats[feat_id][split_id]
+    }
+
     fn predict_leaf_id_of_example(&self, data: &Data, i: usize) -> usize {
         let mut node_id = 0;
         loop {
@@ -116,6 +120,7 @@ impl Tree {
                 },
                 SplitType::HiCardCatLt => {
                     debug_assert!(!self.supercats.is_empty(), "tree supercats not set?");
+                    safety_check!(self.supercats.len() > feat_id);
                     let spcat = self.supercats[feat_id][into_cat(value) as usize];
                     let split_value = into_cat(split_value);
                     node_id = if spcat <= split_value { self.left_child(node_id) }
@@ -138,12 +143,6 @@ impl Tree {
 
     pub fn set_bias(&mut self, bias: NumT) {
         self.bias = bias;
-    }
-
-    pub fn set_supercats(&mut self, supercats: Vec<Vec<CatT>>) {
-        debug_assert!(self.supercats.is_empty(), "setting supercats twice?");
-        debug_assert!(!supercats.is_empty(), "setting empty supercats?");
-        self.supercats = supercats;
     }
 
     pub fn predict_single(&self, data: &Data, i: usize) -> NumT {
@@ -260,7 +259,7 @@ mod test {
 
     #[test]
     fn test_tree() {
-        let tree = Tree::new(3);
+        let tree = Tree::new(3, Vec::new());
         assert_eq!(tree.max_depth(), 3);
         assert_eq!(tree.max_nleafs(), 8);
         assert_eq!(tree.max_ninternal(), 7);

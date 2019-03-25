@@ -94,6 +94,7 @@ parse_config!(Config,
     discr_nbits: usize = 4,                         parse_fromstr;
     max_tree_depth: usize = 6,                      parse_fromstr;
     compression_threshold: NumT = 0.5,              parse_fromstr;
+    binary_gradient_bound: NumT = 1.25,             parse_fromstr;
 
     random_seed: u64 = 1,                           parse_fromstr;
     feature_fraction: NumT = 1.0,                   parse_fromstr;

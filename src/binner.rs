@@ -64,6 +64,15 @@ impl <'a, BinT> Binner<'a, BinT> {
         let i = x.floor() as isize;
         (i.max(0) as usize).min(self.bins.len() - 1)
     }
+
+    pub fn bins_mut(&mut self) -> &mut [BinT] {
+        self.bins
+    }
+
+    pub fn bin_value(&self, index: usize) -> BinT
+    where BinT: Copy {
+        self.bins[index]
+    }
 }
 
 pub struct RankIter<'a, R, BinT, Iter, F>

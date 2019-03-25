@@ -52,6 +52,9 @@ impl <'a> Booster<'a> {
 
     pub fn train(mut self) -> AdditiveTree {
         assert!(self.iter_count == 0);
+
+        self.print_intro();
+
         self.start = Instant::now();
         let target = self.data.get_target();
         let mut ctx = TreeLearnerContext::new(self.config, self.data);
@@ -73,9 +76,9 @@ impl <'a> Booster<'a> {
         let (_, dt) = time!(self.dataset.update(self.config, self.objective.gradients(),
                                                 self.objective.bounds()));
         // learn a tree
-        let learner = TreeLearner::new(ctx, &self.dataset, self.objective);
-        let (mut tree, tt) = time!(learner.train());
-        tree.set_supercats(self.dataset.extract_supercats());
+        let supercats = self.dataset.get_supercats().clone();
+        let learner = TreeLearner::new(ctx, &self.dataset, supercats, self.objective);
+        let (tree, tt) = time!(learner.train());
 
         // print updates
         let el = self.start.elapsed();
@@ -104,5 +107,16 @@ impl <'a> Booster<'a> {
 
         // shrinkage is automatically applied by objective!
         self.ensemble.push_tree(tree);
+    }
+
+    fn print_intro(&self) {
+        debug_assert!({
+            println!("[ ! ] debug build");
+            true
+        });
+        safety_check!({
+            println!("[ ! ] safety checks enabled");
+            true
+        });
     }
 }

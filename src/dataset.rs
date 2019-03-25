@@ -1,7 +1,6 @@
 use std::ops::Range;
 use std::slice::Iter;
 use std::iter::Cloned;
-use std::cmp::Ordering;
 
 use rand::{Rng, SeedableRng};
 use rand::rngs::SmallRng;
@@ -94,7 +93,6 @@ impl <'a> InnerDataset<'a> {
     }
 
     fn initialize_supercats(&mut self) {
-        debug_assert!(self.supercats.is_empty(), "supercats not extracted to tree?");
         self.supercats.resize(self.data.nfeatures(), Vec::new());
     }
 
@@ -157,9 +155,14 @@ impl <'a> InnerDataset<'a> {
         // generate mapping: category -> super-category
         let mut supercats = vec![0; card];
         for (category, &(mean, _)) in grad_stat_pairs.iter().enumerate() {
-            let supercat = split_weights.binary_search_by(|&x| {
-                if x < mean { Ordering::Less } else { Ordering::Greater }
-            }).expect_err("nothing is equal, see cmp");
+            //let supercat = split_weights.binary_search_by(|&x| {
+            //    if x < mean { Ordering::Less } else { Ordering::Greater }
+            //}).expect_err("nothing is equal, see cmp");
+            let mut supercat = 0;
+            for &split in &split_weights {          // lin.search is 15-20% faster than bin.search
+                if split < mean { supercat += 1; }  // split_weights.len() is small
+                else { break; }
+            }
             supercats[category] = supercat as CatT;
         }
 
@@ -207,16 +210,46 @@ impl <'a> InnerDataset<'a> {
         assert!(nsplit_candidates <= config.max_nbins);
         assert!(nsplit_candidates > 0);
 
+        // we don't want to have to search through the split candidates for each example to map the
+        // examples to the split categories, so we look at the the split categories of the bins we
+        // used earlier, and then map all the examples to the bins again
+        let mut bins: Vec<CatT> = unsafe {  // reuse memory for `bins`, avoiding reallocation
+            debug_assert_eq!(std::mem::size_of::<CatT>(), std::mem::size_of::<NumT>());
+            let bins_ptr = bins.as_mut_ptr() as *mut CatT;
+            let bins_cap = bins.capacity();
+            std::mem::forget(bins);
+            Vec::from_raw_parts(bins_ptr, QUANTILE_EST_NBINS, bins_cap)
+        };
+        let mut binner = Binner::new(&mut bins, feat_bounds);
+        for i in 0..QUANTILE_EST_NBINS {
+            let rep = binner.bin_representative(i + 1);
+            let mut cat = 0;
+            for &split in &split_candidates { // linear search is 15-20% faster than binary search
+                if split < rep { cat += 1; }
+                else { break; }
+            }
+            binner.bins_mut()[i] = cat as CatT;
+        }
+
         // construct bitvecs
         let bitvecs = &self.bitvecs[feat_id][0..nsplit_candidates];
         let get_cat = |i| {
             let feat_value = data[i];
-            let cat = split_candidates.binary_search_by(|&split_cand| {
-                if split_cand < feat_value { Ordering::Less }
-                else                       { Ordering::Greater }
-            }).expect_err("nothing is equal, see cmp");
-            //println!("NUM CAT = {} [ < {} feat_value={}]", cat, nsplit_candidates, feat_value);
-            cat
+            //let cat = split_candidates.binary_search_by(|&split_cand| {
+            //    if split_cand < feat_value { Ordering::Less }
+            //    else                       { Ordering::Greater }
+            //}).expect_err("nothing is equal, see cmp");
+            //let mut cat = 0;
+            //for &split in &split_candidates { // linear search is 15-20% faster than binary search
+            //    if split < feat_value { cat += 1; }
+            //    else { break; }
+            //}
+            //println!("NUM CAT = {} [ max={} feat_value={} < {:?}]", cat, nsplit_candidates,
+            //         feat_value, split_candidates.get(cat));
+            let alt_cat = binner.bin_value(binner.get_bin(feat_value));
+            //println!("alt_cat = {}, cat = {}", alt_cat, cat);
+            //cat
+            alt_cat as usize
         };
         Self::zero_bitvecs(&mut self.store, bitvecs);
         Self::fill_bitvecs(&mut self.store, bitvecs, example_iter, get_cat);
@@ -315,7 +348,8 @@ impl <'a> Dataset<'a> {
         self.inner.initialize_supercats();
 
         // only fully update every `config.sample_freq` updates
-        if config.sample_freq == 0 || self.update_count % config.sample_freq != 0 { return; }
+        if config.sample_freq == 0 || (self.update_count > 0 &&
+                                       self.update_count % config.sample_freq != 0) { return; }
 
         self.inner.sample_features();
 
@@ -412,17 +446,14 @@ impl <'a> Dataset<'a> {
         }
     }
 
-    pub fn get_supercat(&self, feat_id: usize, split_id: usize) -> CatT {
-        self.inner.supercats[feat_id][split_id]
-    }
-
-    pub fn extract_supercats(&mut self) -> Vec<Vec<CatT>> {
-        assert!(!self.inner.supercats.is_empty(), "not yet updated?");
-        let mut tmp = Vec::new();
-        std::mem::swap(&mut tmp, &mut self.inner.supercats);
-        debug_assert!(!tmp.is_empty());
-        debug_assert!(self.inner.supercats.is_empty());
-        tmp
+    pub fn get_supercats(&mut self) -> &Vec<Vec<CatT>> {
+        //assert!(!self.inner.supercats.is_empty(), "not yet updated?");
+        //let mut tmp = Vec::new();
+        //std::mem::swap(&mut tmp, &mut self.inner.supercats);
+        //debug_assert!(!tmp.is_empty());
+        //debug_assert!(self.inner.supercats.is_empty());
+        //tmp
+        &self.inner.supercats
     }
     
     pub fn data(&self) -> &Data {

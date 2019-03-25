@@ -228,10 +228,11 @@ where 'a: 'b, // a lives longer than b
 impl <'a, 'b, 'c> TreeLearner<'a, 'b, 'c>
 where 'a: 'b {
     pub fn new(ctx: &'b mut TreeLearnerContext<'a>, dataset: &'b Dataset<'c>,
-               objective: &'b mut dyn Objective) -> Self
+               supercats: Vec<Vec<CatT>>, objective: &'b mut dyn Objective)
+        -> Self
     {
         ctx.reset();
-        let tree = Tree::new(ctx.config.max_tree_depth);
+        let tree = Tree::new(ctx.config.max_tree_depth, supercats);
         TreeLearner {
             ctx,
             data: dataset.data(),
@@ -554,7 +555,7 @@ where 'a: 'b {
             FeatType::HiCardCat => {
                 let sc = split.split_crit.split_value as CatT;
                 let iter = (0..self.data.feat_card(feat_id))
-                    .filter(|&c| self.dataset.get_supercat(feat_id, c) <= sc)
+                    .filter(|&c| self.tree.get_supercat(feat_id, c) <= sc)
                     .map(|c| format!("{}", c));
                 let mut val_str = String::new();
                 for x in iter {
