@@ -1,5 +1,7 @@
 use std::env;
-use std::time::Instant;
+//use std::time::Instant;
+use cpu_time::ProcessTime;
+
 
 //use crossbeam_utils::thread;
 
@@ -113,7 +115,7 @@ fn boost(config: &Config, d_train: &Data, objective: &mut dyn Objective)
     let ms = metrics_from_names(&config.metrics).ok_or("unknown metric".to_string())?;
     let booster = Booster::new(&config, &d_train, objective, &ms);
 
-    let start = Instant::now();
+    let start = ProcessTime::now();
     let model = booster.train();
     let el = start.elapsed();
     let secs = el.as_secs() as f32 + el.subsec_micros() as f32 * 1e-6;
