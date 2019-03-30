@@ -72,7 +72,6 @@ fn parse_vec<T: FromStr>(value: &str) -> Option<Vec<T>> {
 parse_config!(Config,
     train: String = String::new(),                  parse_fromstr;
     test: String = String::new(),                   parse_fromstr;
-    target_feature: isize = -1,                     parse_fromstr;
 
     objective: String = String::from("L2"),         parse_fromstr;
     metrics: Vec<String> = vec![],                  parse_vec;
@@ -88,7 +87,7 @@ parse_config!(Config,
     reg_lambda: NumT = 0.0,                         parse_fromstr;
     min_examples_leaf: u32 = 1,                     parse_fromstr;
     min_gain: NumT = 1e-6,                          parse_fromstr;
-    huber_alpha: NumT = 0.0,                        parse_fromstr;
+    huber_alpha: NumT = 0.95,                       parse_fromstr;
 
     max_nbins: usize = 16,                          parse_fromstr;
     discr_nbits: usize = 4,                         parse_fromstr;

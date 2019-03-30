@@ -21,7 +21,7 @@ pub trait Objective {
     fn bias(&self) -> NumT;
     
     /// Initialize the objective. This is done once at the beginning. The objective should set each
-    /// prediction to its bias.
+    /// prediction to its bias (-> use initialize_base).
     fn initialize(&mut self, config: &Config, targets: &[NumT]);
 
     /// Update the gradients and related state of the objective so the next tree can be built.
@@ -36,12 +36,13 @@ pub trait Objective {
     fn update_out_of_bag_prediction(&mut self, i: usize, value: NumT);
 }
 
-pub fn objective_from_name(name: &str, _config: &Config) -> Option<Box<dyn Objective>> {
+pub fn objective_from_name(name: &str) -> Option<Box<dyn Objective>> {
     match name.to_lowercase().as_str() {
         "l2"     => Some(Box::new(L2::new())),
         "l1"     => Some(Box::new(L1::new())),
-//        "Huber"   => Box::new(Huber::new(config.huber_alpha)),
+        "huber"  => Some(Box::new(Huber::new())),
         "binary" => Some(Box::new(Binary::new())),
+        "hinge"  => Some(Box::new(Hinge::new())),
         _        => None,
     }
 }
@@ -111,33 +112,34 @@ macro_rules! objective_struct {
     }
 }
 
-macro_rules! median_value {
-    (targets: $self:ident, $targets:ident, $i:ident) => {{
+macro_rules! quantile {
+    (@get_value targets: $self:ident, $targets:ident, $i:ident) => {{
         $targets[$i]
     }};
-    (errors: $self:ident, $targets:ident, $i:ident) => {{
+    (@get_value residuals: $self:ident, $targets:ident, $i:ident) => {{
         $targets[$i] - $self.predictions[$i]
+    }};
+    (of $values:ident: $q:expr, $self:ident, $limits:expr, $targets:ident, $irange:expr) => {{
+        let bins = &mut $self.bins;
+        bins.iter_mut().for_each(|x| *x = 0);
+
+        let mut binner = Binner::new(bins, $limits);
+        let mut count = 0;
+        for i in $irange {
+            let value = quantile!(@get_value $values: $self, $targets, i);
+            count += 1;
+            binner.insert(value, 1, |x, y| *x += y);
+        }
+
+        let rank = ((count as NumT) * $q).floor() as u32;
+        let bin = binner.bin_with_rank(rank, |&x| x);
+        binner.bin_representative(bin + 1)
     }}
 }
 
 macro_rules! median {
     (of $values:ident: $self:ident, $limits:expr, $targets:ident, $irange:expr) => {{
-        let bins = &mut $self.bins;
-        let limits = $limits;
-
-        bins.iter_mut().for_each(|x| *x = 0);
-
-        let mut binner = Binner::new(bins, limits);
-        let mut count = 0;
-        for i in $irange {
-            let value = median_value!($values: $self, $targets, i);
-            count += 1;
-            binner.insert(value, 1, |x, y| *x += y);
-        }
-
-        let rank = count / 2;
-        let bin = binner.bin_with_rank(rank, |&x| x);
-        binner.bin_representative(bin)
+        quantile!(of $values: 0.5, $self, $limits, $targets, $irange)
     }}
 }
 
@@ -165,8 +167,7 @@ impl Objective for L2 {
         assert_eq!(self.predictions.len(), n);
         assert_eq!(self.gradients.len(), n);
 
-        let mut min = POS_INF;
-        let mut max = NEG_INF;
+        let (mut min, mut max) = (POS_INF, NEG_INF);
         for i in 0..n {
             let err = targets[i] - self.predictions[i];
             min = NumT::min(min, err);
@@ -196,14 +197,14 @@ impl Objective for L2 {
 
 objective_struct!(L1 {
     limits: (NumT, NumT) = (0.0, 0.0),
-    bins: Vec<u32> = vec![0; 2048]
+    bins: Vec<u32> = vec![0; 1024]
 });
 
 impl Objective for L1 {
     impl_simple_obj_methods!(L1, |_: &L1| (-1.0, 1.0));
 
     fn initialize(&mut self, config: &Config, targets: &[NumT]) {
-        let (mut min, mut max) = (1.0 / 0.0, -1.0 / 0.0);
+        let (mut min, mut max) = (POS_INF, NEG_INF);
         for &t in targets {
             min = t.min(min);
             max = t.max(max);
@@ -217,7 +218,7 @@ impl Objective for L1 {
         let n = targets.len();
         assert_eq!(self.predictions.len(), n);
         assert_eq!(self.gradients.len(), n);
-        let (mut min, mut max) = (1.0 / 0.0, -1.0 / 0.0);
+        let (mut min, mut max) = (POS_INF, NEG_INF);
         for i in 0..n {
             let err = targets[i] - self.predictions[i];
             min = err.min(min);
@@ -228,9 +229,8 @@ impl Objective for L1 {
     }
 
     fn predict_leaf_value(&mut self, targets: &[NumT], examples: &[usize]) -> NumT {
-        self.bins.iter_mut().for_each(|x| *x = 0);
         let iter = examples.iter().cloned();
-        let value = median!(of errors: self, self.limits, targets, iter);
+        let value = median!(of residuals: self, self.limits, targets, iter);
         self.update_predictions(examples, value)
     }
 }
@@ -242,114 +242,72 @@ impl Objective for L1 {
 
 // - Huber loss -----------------------------------------------------------------------------------
 
-// TODO
-//objective_struct!(Huber {
-//    bounds: (NumT, NumT) = (0.0, 0.0),
-//    bins: Vec<u32> = vec![0; 2048 ],
-//    rs: Vec<NumT> = Vec::new(),
-//    median: NumT = 0.0,
-//    quantile: NumT = 0.0,
-//    alpha: NumT = 0.0
-//});
-
-/*
-pub struct Huber {
-    bins: Vec<u32>,
-    rs: Vec<NumT>,
-    predictions: Vec<NumT>,
-    gradients: Vec<NumT>,
-    median: NumT,
-    quantile: NumT,
-    alpha: NumT,
-    bounds: (NumT, NumT),
-}
-
-impl Huber {
-    pub fn new(alpha: NumT) -> Huber {
-        Huber {
-            bins: vec![0; 100],
-            rs: Vec::new(),
-            predictions: Vec::new(),
-            gradients: Vec::new(),
-            median: 0.0,
-            quantile: 0.0,
-            alpha,
-            bounds: (0.0, 0.0),
-        }
-    }
-}
+objective_struct!(Huber {
+    alpha: NumT = 0.0,
+    delta: NumT = 0.0,
+    limits: (NumT, NumT) = (0.0, 0.0),
+    bins: Vec<u32> = vec![0; 1024]
+});
 
 impl Objective for Huber {
-    impl_simple_obj_methods!(Huber, |this: &Huber| this.bounds);
+    impl_simple_obj_methods!(Huber, |this: &Huber| (-this.delta, this.delta));
 
-    fn bias(&self, targets: &[NumT]) -> NumT {
-        self.bins.iter_mut().for_each(|x| *x = 0);
-
-        let mut binner = Binner::new(&mut self.bins, self.limits, |x, y| *x += y);
+    fn initialize(&mut self, config: &Config, targets: &[NumT]) {
+        let (mut min, mut max) = (POS_INF, NEG_INF);
         for &t in targets {
-            binner.insert(t, 1);
+            min = t.min(min);
+            max = t.max(max);
         }
-
-        let rank = (targets.len() / 2) as u32;
-        let (bin, _rank_lo, _rank_hi) = binner.bin_with_rank::<u32, _>(rank, |&x| x);
-        binner.bin_representative(bin)
-    }
-
-    fn initialize(&mut self, targets: &[NumT], predictions: &[NumT]) {
-        assert_eq!(targets.len(), predictions.len());
         let n = targets.len();
-        self.rs.resize(n, 0.0);
-        self.gradients.resize(n, 0.0);
-
-        let mut min: NumT =  1.0 / 0.0;
-        let mut max: NumT = -1.0 / 0.0;
-
-        for i in 0..n {
-            let r = targets[i] - predictions[i];
-            self.rs[i] = r;
-            min = min.min(r);
-            max = max.max(r);
-        }
-
-        // estimate quantile
-        self.bins.iter_mut().for_each(|x| *x = 0);
-        let mut binner = Binner::new(&mut self.bins, (min, max), |x, y| *x += y);
-        for &r in &self.rs { binner.insert(r, 1); }
-
-        let rank = (n as NumT * self.alpha).round() as u32;
-        let (bin, _rank_lo, _rank_hi) = binner.bin_with_rank::<u32, _>(rank, |&x| x);
-        self.quantile = binner.bin_representative(bin);
-        self.bounds = (-self.quantile.abs(), self.quantile.abs());
-
-        // set gradient values
-        for i in 0..n {
-            let r = self.rs[i];
-            let grad = &mut self.gradients[i];
-
-            if r.abs() <= self.quantile { *grad = -1.0 * r; }
-            else { *grad = -1.0 * r.signum() * self.quantile }
-        }
-
-        // estimate median
-        let rank = (n / 2) as u32;
-        let (bin, _rank_lo, _rank_hi) = binner.bin_with_rank::<u32, _>(rank, |&x| x);
-        self.median = binner.bin_representative(bin);
+        let bias = median!(of targets: self, (min, max), targets, 0..n);
+        self.initialize_base(config, n, bias);
+        assert!(0.0 < config.huber_alpha && config.huber_alpha < 1.0); // TODO proper config validation
+        self.alpha = config.huber_alpha;
     }
 
-    fn predict_leaf_value(&mut self, _: &[NumT], examples: &[usize]) -> NumT {
-        let c = (examples.len() as NumT).recip();
-        let mut sum = 0.0;
-        for &i in examples {
-            let rdiff = self.rs[i] - self.median;
-            sum += rdiff.signum() * self.quantile.min(rdiff.abs());
+    fn update(&mut self, targets: &[NumT]) {
+        let n = targets.len();
+        assert_eq!(self.predictions.len(), n);
+        assert_eq!(self.gradients.len(), n);
+
+        // determine delta = alpha-quantile { residuals }
+        let (mut min, mut max) = (POS_INF, NEG_INF);
+        for i in 0..n {
+            let err = targets[i] - self.predictions[i];
+            min = err.min(min);
+            max = err.max(max);
         }
-        self.median + c * sum
+        self.limits = (min, max);
+        self.delta = quantile!(of residuals: self.alpha, self, (min, max), targets, 0..n).abs();
+
+        // set the gradients
+        for i in 0..n {
+            let err = targets[i] - self.predictions[i];
+            let err_abs = err.abs();
+            if err_abs <= self.delta {
+                self.gradients[i] = err;
+            } else {
+                self.gradients[i] = self.delta * err.signum();
+            }
+        }
+    }
+
+    fn predict_leaf_value(&mut self, targets: &[NumT], examples: &[usize]) -> NumT {
+        // find median of residuals
+        let rmed = median!(of residuals: self, self.limits, targets, examples.iter().cloned());
+
+        // compute leaf value
+        let mut s = 0.0;
+        for &i in examples {
+            let err = targets[i] - self.predictions[i];
+            let d = err - rmed;
+            s += d.signum() * NumT::min(self.delta, d.abs());
+        }
+        let value = rmed + s / (examples.len() as NumT);
+        self.update_predictions(examples, value)
     }
 }
 
-
-
-*/
 
 
 // - Binary log loss ------------------------------------------------------------------------------
@@ -398,6 +356,71 @@ impl Objective for Binary {
             den += yabs * (2.0 - yabs);
         }
         let value = num / den;
+        self.update_predictions(examples, value)
+    }
+}
+
+
+
+
+// - Hinge ----------------------------------------------------------------------------------------
+
+objective_struct!(Hinge {});
+
+impl Objective for Hinge {
+    impl_simple_obj_methods!(Hinge, |_: &Hinge| (-1.0, 2.0));
+
+    fn initialize(&mut self, config: &Config, targets: &[NumT]) {
+        debug_assert!(targets.iter().all(|&t| t == 0.0 || t == 1.0));
+        assert_eq!(config.discr_nbits, 2, "Hinge loss requires 2 bits");
+        let n = targets.len();
+
+        let nneg = targets.iter().filter(|&x| *x < 0.5).count() as NumT;
+        let npos = n as NumT - nneg;
+        let prior = (nneg * -1.0 + npos) / n as NumT;
+
+        self.initialize_base(config, n, prior);
+
+        println!("[   ] hinge objective: pos {}, neg {}, prior {}", npos, nneg, prior);
+    }
+
+    fn update(&mut self, targets: &[NumT]) {
+        let n = targets.len();
+        assert_eq!(self.predictions.len(), n);
+        assert_eq!(self.gradients.len(), n);
+
+        for i in 0..n {
+            let g = &mut self.gradients[i];
+            let (t, p) = (targets[i], self.predictions[i]);
+            if t < 0.5 { // neg class
+                *g = if p > -1.0 { 1.0 } else { 0.0 };
+            } else {     // pos class
+                *g = if p < 1.0 { -1.0 } else { 0.0 };
+            }
+        }
+    }
+
+    fn predict_leaf_value(&mut self, targets: &[NumT], examples: &[usize]) -> NumT {
+        let mut value = 0.0;
+        for &i in examples {
+            let (t, p) = (targets[i], self.predictions[i]);
+            if t < 0.5 { // neg class
+                let x = (2.0 + p).max(0.0);
+                value -= x*x;
+            } else {
+                let x = (2.0 - p).max(0.0);
+                value += x*x;
+            }
+        }
+        value /= examples.len() as NumT;
+
+        //println!("leaf value = {} #pos={}, #neg={}", value, pcnt, ncnt);
+        //for &i in examples.iter().take(10) {
+        //    let (t, p) = (targets[i], self.predictions[i]);
+        //    println!("{:5} {:2} (g={:2}) {:.3} -> {:.3}", i, t, self.gradients[i], p, p + value);
+        //}
+        //println!();
+
         self.update_predictions(examples, value)
     }
 }

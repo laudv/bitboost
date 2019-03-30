@@ -1,8 +1,8 @@
 // TODO safety check, hard asserts, but possible to disable at compile time
 #[macro_export]
 macro_rules! safety_check {
-    ($assertion:expr) => { assert!($assertion); } // enabled
-    //($assertion:expr) => {} // disabled
+    //($assertion:expr) => { assert!($assertion); } // enabled
+    ($assertion:expr) => {} // disabled
 }
 
 pub type NumT = f32; // numeric type

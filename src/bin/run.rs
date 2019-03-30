@@ -54,7 +54,7 @@ fn parse(args: &[String])
     -> Result<(Config, Data, Option<Data>, Box<dyn Objective>, Vec<Box<dyn Metric>>), String>
 {
     let config = Config::parse(args.iter().map(|x| x.as_str()))?;
-    let objective = objective_from_name(&config.objective, &config)
+    let objective = objective_from_name(&config.objective)
         .ok_or(format!("unknown objective '{}'", config.objective))?;
     let ms = metrics_from_names(&config.metrics).ok_or("unknown metric".to_string())?;
     let (train_data, test_data) = load_data(&config)?;
