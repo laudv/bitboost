@@ -348,7 +348,7 @@ impl <'a> Dataset<'a> {
         self.inner.initialize_supercats();
 
         // only fully update every `config.sample_freq` updates
-        if config.sample_freq == 0 || (self.update_count > 0 &&
+        if config.sample_freq == 0 || (self.update_count > 1 &&
                                        self.update_count % config.sample_freq != 0) { return; }
 
         self.inner.sample_features();

@@ -175,7 +175,8 @@ impl Objective for L2 {
             self.gradients[i] = -err;
         }
 
-        self.bounds = (min, max);
+        let bound = NumT::min(min.abs(), max.abs());
+        self.bounds = (bound, bound);
     }
 
     fn predict_leaf_value(&mut self, targets: &[NumT], examples: &[usize]) -> NumT {

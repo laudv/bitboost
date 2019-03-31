@@ -107,6 +107,9 @@ impl Data {
                 .for_each(|(i, name)| names[i].push_str(name));
         }
 
+        let target_id = record_len - 1;
+        println!("[   ] using target {} (column {})", names[target_id], target_id);
+
         Ok(Data {
             max_nbins: config.max_nbins,
             names,

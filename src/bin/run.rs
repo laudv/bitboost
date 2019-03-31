@@ -71,7 +71,6 @@ fn load_data(config: &Config) -> Result<(Data, Option<Data>), String> {
         //});
         let test_data_res = if !config.test.is_empty() {
             let rtest = Data::from_csv_path(&config, config.test.as_str());
-            println!("[   ] finished loading test data");
             if rtest.is_ok() { println!("[   ] finished loading test data"); }
             else {         println!("[   ] failed loading test data: '{}'", config.train); }
             Some(rtest)
