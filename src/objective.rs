@@ -176,7 +176,7 @@ impl Objective for L2 {
         }
 
         let bound = NumT::min(min.abs(), max.abs());
-        self.bounds = (bound, bound);
+        self.bounds = (-bound, bound);
     }
 
     fn predict_leaf_value(&mut self, targets: &[NumT], examples: &[usize]) -> NumT {
