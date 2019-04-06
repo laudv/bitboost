@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) DTAI - KU Leuven – All rights reserved.
+ * Proprietary, do not copy or distribute without permission.
+ * Written by Laurens Devos, 2019
+*/
+
 use crate::{NumT, EPSILON, POS_INF, NEG_INF};
 use crate::config::Config;
 use crate::binner::Binner;

@@ -1,4 +1,9 @@
-// TODO safety check, hard asserts, but possible to disable at compile time
+/*
+ * Copyright (c) DTAI - KU Leuven – All rights reserved.
+ * Proprietary, do not copy or distribute without permission.
+ * Written by Laurens Devos, 2019
+*/
+
 #[macro_export]
 macro_rules! safety_check {
     //($assertion:expr) => { assert!($assertion); } // enabled

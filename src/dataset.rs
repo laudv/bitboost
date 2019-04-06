@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) DTAI - KU Leuven – All rights reserved.
+ * Proprietary, do not copy or distribute without permission.
+ * Written by Laurens Devos, 2019
+*/
+
 use std::ops::Range;
 use std::slice::Iter;
 use std::iter::Cloned;
