@@ -1,5 +1,5 @@
 [package]
-name = "spdyboost"
+name = "bitboost-lib"
 version = "0.1.0"
 authors = ["Laurens Devos <laurens.devos@outlook.com>"]
 autobenches = false
@@ -24,7 +24,7 @@ opt-level = 3
 debug = true
 
 [[bin]]
-name = "spdyboost-run"
+name = "bitboost"
 path = "src/bin/run.rs"
 
 #[[bench]]
