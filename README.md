@@ -43,7 +43,8 @@ Use the `bitboost` binary to run BitBoost from the command line:
 
 ## Parameters
 
-All the parameters can be found in [src/config.rs][config].
+All the parameters can be found in [src/config.rs][config]. The supported
+objectives are in [src/objective.rs][objective].
 
 
 
@@ -61,4 +62,5 @@ The datasets are available at
 [LightGBM]: https://lightgbm.readthedocs.io
 [CatBoost]: https://catboost.ai
 [AVX2]: https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2
-[config]: https://github.com/laurens-devos/bitboost/blob/7573dc66e1e519ec5612ff4018f42b0b5c8a72a2/src/config.rs#L79
+[config]: https://github.com/laurens-devos/bitboost/blob/master/src/config.rs
+[config]: https://github.com/laurens-devos/bitboost/blob/master/src/objective.rs
