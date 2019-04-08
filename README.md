@@ -63,4 +63,4 @@ The datasets are available at
 [CatBoost]: https://catboost.ai
 [AVX2]: https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2
 [config]: https://github.com/laurens-devos/bitboost/blob/master/src/config.rs
-[config]: https://github.com/laurens-devos/bitboost/blob/master/src/objective.rs
+[objective]: https://github.com/laurens-devos/bitboost/blob/master/src/objective.rs
