@@ -29,3 +29,4 @@ pub mod objective;
 pub mod binner;
 pub mod metric;
 pub mod boost;
+pub mod c_api;

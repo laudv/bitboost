@@ -23,29 +23,35 @@ macro_rules! parse_config {
             }
 
             #[allow(dead_code)]
-            pub fn parse<'a, I>(input: I) -> Result<$cname, String>
-            where I: 'a + Iterator<Item = &'a str>{
+            pub fn parse<'a, I>(lines: I) -> Result<$cname, String>
+            where I: 'a + Iterator<Item = &'a str> {
                 let mut config = Self::new();
 
-                for line in input {
-                    let (name, value) = {
-                        let mut iter = line.split('=');
-                        let name = iter.next().ok_or(format!("invalid config line: {}", line))?;
-                        let value = iter.next().ok_or(format!("invalid config line: {}", line))?;
-                        (name.trim(), value.trim())
-                    };
-
-                    match name {
-                        $( stringify!($x) => {
-                            config.$x = $parser(value)
-                                .ok_or(format!("config: expected value of type `{}` in line `{}`",
-                                               stringify!($t), line))?;
-                        },)*
-                        _ => { return Err(format!("unknown config value: {}", name)); }
-                    }
+                for line in lines {
+                    config.parse_record_str(line)?;
                 }
 
                 Ok(config)
+            }
+
+            fn parse_record_str<'a>(&mut self, line: &'a str) -> Result<(), String> {
+                let mut iter = line.split('=');
+                let name = iter.next().ok_or(format!("invalid config line: {}", line))?;
+                let value = iter.next().ok_or(format!("invalid config line: {}", line))?;
+                self.parse_record(name.trim(), value.trim())?;
+                Ok(())
+            }
+
+            pub fn parse_record<'a>(&mut self, name: &'a str, value: &'a str) -> Result<(), String> {
+                match name {
+                    $( stringify!($x) => {
+                        self.$x = $parser(value)
+                            .ok_or(format!("config: expected value of type `{}` in record `{}={}`",
+                                           stringify!($t), name, value))?;
+                    },)*
+                    _ => { return Err(format!("unknown config field: {}", name)); }
+                };
+                Ok(())
             }
         }
     }

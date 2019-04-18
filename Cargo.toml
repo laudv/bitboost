@@ -1,11 +1,12 @@
 [package]
-name = "bitboost-lib"
+name = "bitboost"
 version = "0.1.0"
 authors = ["Laurens Devos <laurens.devos@outlook.com>"]
 autobenches = false
 edition = "2018"
 
 [dependencies]
+libc = "0.2.51"
 num = "0.2"
 rand = "0.6.1"
 fnv = "1.0.6"
@@ -14,6 +15,10 @@ crossbeam-utils = "0.6.5"
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
 pretty_env_logger = "0.3.0"
 cpu-time = "0.1.0"
+
+[lib]
+name = "bitboost"
+crate-type = ["rlib", "cdylib"]
 
 [dev-dependencies]
 #criterion = "0.2"
@@ -24,7 +29,7 @@ opt-level = 3
 debug = true
 
 [[bin]]
-name = "bitboost"
+name = "runbitboost"
 path = "src/bin/run.rs"
 
 #[[bench]]

@@ -240,13 +240,18 @@ impl AdditiveTree {
 
     pub fn predict(&self, data: &Data) -> Vec<NumT> {
         let nexamples = data.nexamples();
-        let mut accum = vec![self.bias; nexamples];
+        let mut accum = vec![0.0; nexamples];
+        self.predict_buf(data, &mut accum);
+        accum
+    }
+
+    pub fn predict_buf(&self, data: &Data, buf: &mut [NumT]) {
+        for x in buf.iter_mut() { *x = self.bias; }
         for tree in &self.trees {
-            tree.predict_and(data, &mut accum, |prediction, accum| {
+            tree.predict_and(data, buf, |prediction, accum| {
                 *accum += prediction;
             });
         }
-        accum
     }
 }
 

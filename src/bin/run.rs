@@ -11,15 +11,15 @@ use cpu_time::ProcessTime;
 
 //use crossbeam_utils::thread;
 
-use bitboost_lib::NumT;
-use bitboost_lib::config::Config;
-use bitboost_lib::data::Data;
-use bitboost_lib::dataset::Dataset;
-use bitboost_lib::objective::{Objective, objective_from_name};
-use bitboost_lib::tree::{AdditiveTree, Tree};
-use bitboost_lib::tree_learner::{TreeLearner, TreeLearnerContext};
-use bitboost_lib::metric::{Metric, metrics_from_names};
-use bitboost_lib::boost::Booster;
+use bitboost::NumT;
+use bitboost::config::Config;
+use bitboost::data::Data;
+use bitboost::dataset::Dataset;
+use bitboost::objective::{Objective, objective_from_name};
+use bitboost::tree::{AdditiveTree, Tree};
+use bitboost::tree_learner::{TreeLearner, TreeLearnerContext};
+use bitboost::metric::{Metric, metrics_from_names};
+use bitboost::boost::Booster;
 
 pub fn main() -> Result<(), String> {
     pretty_env_logger::init();

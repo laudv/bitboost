@@ -83,10 +83,7 @@ impl Data {
                         features[i].push(value);
                         limits[i] = { let l = limits[i]; (l.0.min(value), l.1.max(value)) };
                         if ftypes[i] == FeatType::LoCardCat {
-                            if value.round() != value || value < 0.0 {
-                                return Err(format!("Invalid categorical value {} at record {}",
-                                           value, record_count));
-                            }
+                            Self::check_categorical_value(value)?;
                             cards[i] = cards[i].max(1 + into_cat(value) as usize);
                         }
                     }
@@ -128,6 +125,55 @@ impl Data {
         })
     }
 
+    pub fn empty(config: &Config, nfeatures: usize, nexamples: usize) -> Data {
+        let nfeatures = nfeatures + 1; // include target
+
+        let names: Vec<String> = (0..nfeatures).map(|i| format!("feat{:04}", i)).collect();
+        let features = vec![vec![0.0; nexamples]; nfeatures];
+        let limits = vec![(0.0, 0.0); nfeatures];
+        let ftypes = vec![FeatType::Numerical; nfeatures];
+        let cards = vec![0; nfeatures];
+
+        Data {
+            max_nbins: config.max_nbins,
+            names,
+            nfeatures: nfeatures - 1, // exclude target
+            nexamples,
+            features,
+            limits,
+            ftypes,
+            cards,
+        }
+    }
+
+    pub fn set_feature_data(&mut self, feat_id: usize, data: &[NumT], categorical: bool)
+        -> Result<(), String>
+    {
+        assert_eq!(data.len(), self.nexamples);
+        let feat = &mut self.features[feat_id];
+        let flim = &mut self.limits[feat_id];
+        let card = &mut self.cards[feat_id];
+        assert_eq!(feat.len(), self.nexamples);
+        for i in 0..self.nexamples {
+            let value = data[i];
+            feat[i] = value;
+            *flim = (flim.0.min(value), flim.1.max(value));
+
+            if categorical {
+                Self::check_categorical_value(value)?;
+                *card = (*card).max(1 + into_cat(value) as usize);
+            }
+        }
+        if categorical {
+            if *card > self.max_nbins {
+                self.ftypes[feat_id] = FeatType::HiCardCat;
+            } else {
+                self.ftypes[feat_id] = FeatType::LoCardCat;
+            }
+        }
+        Ok(())
+    }
+
     pub fn nfeatures(&self) -> usize { self.nfeatures }
     pub fn nexamples(&self) -> usize { self.nexamples }
     pub fn feat_name(&self, feature: usize) -> &str { &self.names[feature] } // TODO rename
@@ -155,6 +201,14 @@ impl Data {
         // TODO implement! check if test dataset and training data set are compatible
         // strange issues can occur if they are not
         unimplemented!()
+    }
+
+    fn check_categorical_value(value: NumT) -> Result<(), String> {
+        if value.round() != value || value < 0.0 {
+            Err(format!("Invalid categorical value {}", value))
+        } else {
+            Ok(())
+        }
     }
 }
 
