@@ -6,7 +6,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../python"))
 
 from bitboost import BitBoostRegressor
 import numpy as np
-import pandas as pd
 import sklearn.metrics
 
 nfeatures = 5
@@ -28,9 +27,9 @@ bit.learning_rate = 0.5
 bit.niterations = 50
 bit.categorical_features = list(range(nfeatures))
 
-bit.fit(pd.DataFrame(dtrain), ytrain)
-train_pred = bit.predict(pd.DataFrame(dtrain))
-test_pred = bit.predict(pd.DataFrame(dtest))
+bit.fit(dtrain, ytrain)
+train_pred = bit.predict(dtrain)
+test_pred = bit.predict(dtest)
 
 train_acc = sklearn.metrics.mean_absolute_error(ytrain, train_pred)
 test_acc = sklearn.metrics.mean_absolute_error(ytest, test_pred)

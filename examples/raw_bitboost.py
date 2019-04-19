@@ -1,3 +1,7 @@
+"""
+Lower-level RawBitBoost interface that interacts with the Rust code though a C ABI.
+"""
+
 import sys
 import os
 import timeit
@@ -35,7 +39,7 @@ print(f"bitboost: {bbt/10} sec")
 predictions = bb.predict()
 
 balance = target.sum() / target.shape[0]
-print(f"class balance: {balance} vs {1-balance}")
+print("class balance: {:.2} vs. {:.2}".format(balance, 1-balance))
 acc = sklearn.metrics.accuracy_score(ttrain==1.0, predictions > 0)
 print(f"bit train accuracy: {acc}")
 
