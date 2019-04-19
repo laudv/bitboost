@@ -4,9 +4,10 @@
 
 name = "bitboost"
 
-from .bitboost import RawBitBoost
-from .sklearn import BitBoost
+from .sklearn import BitBoost, BitBoostRegressor, BitBoostClassifier
 
 __all__ = [
     "BitBoost"
+    "BitBoostRegressor"
+    "BitBoostClassifier"
 ]

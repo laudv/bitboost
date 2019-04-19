@@ -9,7 +9,6 @@ import textwrap
 from ctypes import *
 
 import numpy as np
-import pandas as pd
 
 def _get_lib_dir():
     d = os.path.dirname(__file__)
@@ -106,20 +105,17 @@ class RawBitBoost:
 
     def set_data(self, data, cat_features = set()):
         self._check()
-        assert isinstance(data, pd.DataFrame)
+        assert isinstance(data, np.ndarray)
+        assert data.dtype == self.numt
         assert data.shape[1] == self._nfeatures
 
         self._nexamples = data.shape[0]
         self._rust_refresh_data(self._ctx_ptr, self._nexamples)
 
         for feat_id in range(self._nfeatures):
-            assert data.iloc[:, feat_id].dtype == self.numt
-
-        for feat_id in range(self._nfeatures):
-            # we copy to avoid having to deal with strides/column-major/row-major issues
-            col = data.iloc[:, feat_id].to_numpy(dtype=self.numt, copy=True)
             is_cat = feat_id in cat_features
-            self.set_feature_data(feat_id, col, is_cat)
+            column = data[:,feat_id].copy() # make copy to ensure congiguous, not optimal
+            self.set_feature_data(feat_id, column, is_cat)
     
     def set_target(self, data):
         self._check()
@@ -127,6 +123,9 @@ class RawBitBoost:
 
     def set_config_field(self, name, value):
         self._check()
+        if self.config_params[name].type_str.startswith("Vec"):
+            if not isinstance(value, str):
+                value = ",".join(map(str, value))
         n = c_char_p(bytes(str(name), "utf8"))
         v = c_char_p(bytes(str(value), "utf8"))
         self._rust_set_config_field(self._ctx_ptr, n, v)
@@ -157,17 +156,56 @@ class RawBitBoost:
 
 
 
-with open(os.path.join(os.path.dirname(__file__), "../bitboost_config.gen.csv")) as f:
-    r = csv.reader(f)
-    next(r)
+class BitBoostConfigParam:
+    def __init__(self, name, default, type_str, descr):
+        self.name = name
+        self.default = default
+        self.type_str = type_str
+        self.descr = descr
+
+    def __str__(self):
+        s = ""
+        default = self.default_value_str()
+        descr = "\n        ".join(textwrap.wrap(self.descr, 80))
+        s += f"\n    {self.name} : {self.type_str} (default {default})"
+        s += f"\n        {descr}\n"
+        return s
+
+    def default_value_str(self):
+        if self.type_str == "String":
+            return f"\"{self.default}\""
+        return self.default
+
+def get_config_params():
+    config_params = {}
+    with open(os.path.join(os.path.dirname(__file__), "../bitboost_config.gen.csv")) as f:
+        r = csv.reader(f)
+        next(r)
+        for row in r:
+            if "cli only" in row[3]:
+                continue
+            config_params[row[0]] = BitBoostConfigParam(row[0], row[1], row[2], row[3])
+    return config_params
+
+def gen_config_doc(config_params):
     doc = "\nPARAMETERS\n----------"
-    for row in r:
-        if "cli only" in row[3]:
-            continue
-        default = row[1]
-        if not row[1]:
-            default = "\"\""
-        descr = "\n        ".join(textwrap.wrap(row[3], 80))
-        doc += f"\n    {row[0]} : {row[2]} (default {default})"
-        doc += f"\n        {descr}\n"
-    RawBitBoost.__doc__ = doc
+    for name, item in config_params.items():
+        doc += str(item)
+    return doc
+
+def gen_init_fun(config_params, filename):
+    source = "def __init__(self"
+    for name, item in config_params.items():
+        source += f", {name}={item.default_value_str()}"
+    source += "):\n"
+    for name, item in config_params.items():
+        source += f"    self.{name}={name}\n"
+    
+    _locals = {}
+    exec(source, None, _locals)
+
+    initf = _locals["__init__"]
+    initf.__doc__ = gen_config_doc(config_params)
+    return initf
+
+RawBitBoost.config_params = get_config_params()

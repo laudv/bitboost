@@ -1,13 +1,11 @@
-
 import sys
 import os
 import timeit
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../python"))
 
-from bitboost import RawBitBoost
+from bitboost.bitboost import RawBitBoost
 import numpy as np
-import pandas as pd
 import sklearn.metrics
 
 nfeatures = 5
@@ -22,7 +20,7 @@ dtrain, ttrain = data[0:nexamples, :], target[0:nexamples]
 dtest, ttest = data[nexamples:, :], target[nexamples:]
 
 bb = RawBitBoost(nfeatures, nexamples)
-bb.set_data(pd.DataFrame(data=dtrain), cat_features = set(range(nfeatures)))
+bb.set_data(dtrain, cat_features = set(range(nfeatures)))
 bb.set_target(ttrain)
 bb.set_config({
     "objective": "hinge",
@@ -41,7 +39,7 @@ print(f"class balance: {balance} vs {1-balance}")
 acc = sklearn.metrics.accuracy_score(ttrain==1.0, predictions > 0)
 print(f"bit train accuracy: {acc}")
 
-bb.set_data(pd.DataFrame(data=dtest))
+bb.set_data(dtest)
 predictions = bb.predict()
 acc = sklearn.metrics.accuracy_score(ttest==1.0, predictions > 0)
 print(f"bit test accuracy: {acc}")

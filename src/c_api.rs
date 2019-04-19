@@ -146,6 +146,8 @@ wrap_catch_unwind!(
 
             let column = slice::from_raw_parts(column, data.nexamples());
             data.set_feature_data(feat_id, column, is_categorical != 0).unwrap();
+
+            //column.iter().for_each(|i| println!("rust {} {}", feat_id, i));
         }
         0
     }
