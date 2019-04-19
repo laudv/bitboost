@@ -23,7 +23,7 @@ BitBoost is implemented in Rust and uses the standard Rust tools, `cargo` and
    ```
 
 
-## Running
+## Running from the Command Line
 
 Use the `bitboost` binary to run BitBoost from the command line:
 
@@ -41,17 +41,22 @@ Use the `bitboost` binary to run BitBoost from the command line:
 ```
 
 
+## Python Interface
+
+BitBoost has a [Scikit-learn](https://scikit-learn.org/stable/) interface. A number
+of examples are provided in the [examples](examples) folder.
+
+
 ## Parameters
 
-All the parameters can be found in [src/config.rs][config]. The supported
-objectives are in [src/objective.rs][objective].
+All the parameters can be found in [src/config.rs](src/config.rs). The supported
+objectives are in [src/objective.rs](src/objective.rs).
 
 
 
 # Paper: Fast Gradient Boosting Decision Trees with Bit-Level Data Structures
 
-All experiments in the paper used commit
-7468a41783fc539596191eab1708bbba07a57adc.
+All experiments in the paper used commit 7468a41.
 
 The datasets are available at
 [bitboost-datasets](https://github.com/laurens-devos/bitboost-datasets).
@@ -62,5 +67,3 @@ The datasets are available at
 [LightGBM]: https://lightgbm.readthedocs.io
 [CatBoost]: https://catboost.ai
 [AVX2]: https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2
-[config]: https://github.com/laurens-devos/bitboost/blob/master/src/config.rs
-[objective]: https://github.com/laurens-devos/bitboost/blob/master/src/objective.rs
