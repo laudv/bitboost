@@ -3,6 +3,8 @@
 # Written by Laurens Devos, 2019
 
 import os
+import csv
+import textwrap
 
 from ctypes import *
 
@@ -32,22 +34,29 @@ def _get_lib_dir():
     else:
         raise Exception("BitBoost library not found")
 
-class BitBoost:
+class RawBitBoost:
     _lib = CDLL(_get_lib_dir())
     _rust_numt_nbytes = _lib.bb_get_numt_nbytes
     _rust_numt_nbytes.argtypes = []
     _rust_numt_nbytes.restype = c_int
     _numt_nbytes = _rust_numt_nbytes()
+
     numt = c_double if _numt_nbytes == 8 else c_float
-    numt_p = POINTER(numt)   
+    numt_p = POINTER(numt)
+    numt.__doc__ = "BitBoost float type."
+    numt_p.__doc__ = "BitBoost float pointer type."
 
     _rust_alloc = _lib.bb_alloc
-    _rust_alloc.argtypes = [c_int, c_int]
+    _rust_alloc.argtypes = [c_int]
     _rust_alloc.restype = c_void_p
 
     _rust_dealloc = _lib.bb_dealloc
     _rust_dealloc.argtypes = [c_void_p]
     _rust_dealloc.restype = c_int
+
+    _rust_refresh_data = _lib.bb_refresh_data
+    _rust_refresh_data.argtypes = [c_void_p, c_int]
+    _rust_refresh_data.restype = c_int
 
     _rust_set_fdata = _lib.bb_set_feature_data
     _rust_set_fdata.argtypes = [c_void_p, c_int, numt_p, c_int]
@@ -65,20 +74,18 @@ class BitBoost:
     _rust_predict.argtypes = [c_void_p, numt_p]
     _rust_predict.restype = c_int
 
-
     def __init__(self, nfeatures, nexamples):
         assert nfeatures > 0
         assert nexamples > 0
-        self._ctx_ptr: c_void_p = c_void_p(0)
         self._nfeatures = nfeatures
-        self._nexamples = nexamples
+        self._nexamples = -1 # set by set_data
+        self._ctx_ptr = self._rust_alloc(self._nfeatures)
 
-    def __enter__(self):
-        assert not self._ctx_ptr
-        self._ctx_ptr = self._rust_alloc(self._nfeatures, self._nexamples)
-        return self
+    def __del__(self):
+        if self._ctx_ptr:
+            self.dealloc()
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def dealloc(self):
         self._check()
         self._rust_dealloc(self._ctx_ptr)
         self._ctx_ptr = c_void_p(0)
@@ -90,6 +97,7 @@ class BitBoost:
     def set_feature_data(self, feat_id, data, is_categorical):
         self._check()
         assert isinstance(data, np.ndarray)
+        assert data.dtype == self.numt
         assert 0 <= feat_id and feat_id <= self._nfeatures
         assert isinstance(is_categorical, bool) 
         data_ptr = data.ctypes.data_as(self.numt_p)
@@ -99,14 +107,17 @@ class BitBoost:
     def set_data(self, data, cat_features = set()):
         self._check()
         assert isinstance(data, pd.DataFrame)
-        assert data.shape[0] == self._nexamples
         assert data.shape[1] == self._nfeatures
+
+        self._nexamples = data.shape[0]
+        self._rust_refresh_data(self._ctx_ptr, self._nexamples)
 
         for feat_id in range(self._nfeatures):
             assert data.iloc[:, feat_id].dtype == self.numt
 
         for feat_id in range(self._nfeatures):
-            col = data.iloc[:, feat_id].to_numpy(dtype=self.numt)
+            # we copy to avoid having to deal with strides/column-major/row-major issues
+            col = data.iloc[:, feat_id].to_numpy(dtype=self.numt, copy=True)
             is_cat = feat_id in cat_features
             self.set_feature_data(feat_id, col, is_cat)
     
@@ -132,6 +143,7 @@ class BitBoost:
 
     def predict(self):
         self._check()
+        assert self._nexamples > 0
         output = np.zeros(self._nexamples, dtype=self.numt)
         output_ptr = output.ctypes.data_as(self.numt_p)
         self._rust_predict(self._ctx_ptr, output_ptr)
@@ -142,3 +154,20 @@ class BitBoost:
 
     def read_model():
         raise Exception("not implemented")
+
+
+
+with open(os.path.join(os.path.dirname(__file__), "../bitboost_config.gen.csv")) as f:
+    r = csv.reader(f)
+    next(r)
+    doc = "\nPARAMETERS\n----------"
+    for row in r:
+        if "cli only" in row[3]:
+            continue
+        default = row[1]
+        if not row[1]:
+            default = "\"\""
+        descr = "\n        ".join(textwrap.wrap(row[3], 80))
+        doc += f"\n    {row[0]} : {row[2]} (default {default})"
+        doc += f"\n        {descr}\n"
+    RawBitBoost.__doc__ = doc

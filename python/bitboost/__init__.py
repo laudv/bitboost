@@ -4,7 +4,8 @@
 
 name = "bitboost"
 
-from .bitboost import BitBoost
+from .bitboost import RawBitBoost
+from .sklearn import BitBoost
 
 __all__ = [
     "BitBoost"

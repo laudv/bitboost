@@ -1,5 +1,5 @@
 /*
- * Copyright (c) DTAI - KU Leuven – All rights reserved.
+ * Copyright (c) DTAI - KU Leuven - All rights reserved.
  * Proprietary, do not copy or distribute without permission.
  * Written by Laurens Devos, 2019
 */
@@ -39,6 +39,7 @@ impl SplitCrit {
     }
 }
 
+#[derive(Clone)]
 pub struct Tree {
     ninternal: usize,
     max_depth: usize,
@@ -217,6 +218,7 @@ impl Debug for Tree {
 
 // ------------------------------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct AdditiveTree {
     bias: NumT,
     trees: Vec<Tree>,

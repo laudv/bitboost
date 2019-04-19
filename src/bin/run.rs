@@ -1,5 +1,5 @@
 /*
- * Copyright (c) DTAI - KU Leuven – All rights reserved.
+ * Copyright (c) DTAI - KU Leuven - All rights reserved.
  * Proprietary, do not copy or distribute without permission.
  * Written by Laurens Devos, 2019
 */
@@ -135,17 +135,17 @@ where F: Fn(&Data) -> Vec<NumT>
     let train_pred = model(train);
     let test_pred = test.map(|test| (test, model(test)));
 
-    if config.prediction_len > 0 {
-        println!();
-        println!("[   ] train predictions (first {})", config.prediction_len);
-        print_predictions2(train.get_target(), &train_pred, objective.predictions(), config.prediction_len);
+    //if config.prediction_len > 0 {
+    //    println!();
+    //    println!("[   ] train predictions (first {})", config.prediction_len);
+    //    print_predictions2(train.get_target(), &train_pred, objective.predictions(), config.prediction_len);
 
-        if let Some((test_data, ref test_pred)) = test_pred {
-            println!();
-            println!("[   ] test predictions (first {})", config.prediction_len);
-            print_predictions(test_data.get_target(), &test_pred, config.prediction_len);
-        }
-    }
+    //    if let Some((test_data, ref test_pred)) = test_pred {
+    //        println!();
+    //        println!("[   ] test predictions (first {})", config.prediction_len);
+    //        print_predictions(test_data.get_target(), &test_pred, config.prediction_len);
+    //    }
+    //}
 
     println!();
     println!("[   ] objective: {}", objective.name());
@@ -164,6 +164,7 @@ where F: Fn(&Data) -> Vec<NumT>
     }
 }
 
+#[allow(dead_code)]
 fn print_predictions(target: &[NumT], prediction: &[NumT], npreds: usize) {
     println!("{:4}  {:>15} {:>15} {:>15}", "", "target", "prediction", "error");
     for (i, (x, y)) in target.iter().zip(prediction).enumerate().take(npreds) {
@@ -181,6 +182,7 @@ fn print_predictions2(target: &[NumT], prediction: &[NumT], objective_preds: &[N
     }
 }
 
+#[allow(dead_code)]
 fn print_predictions_raw(predictions: &[NumT]) {
     for (i, pred) in predictions.iter().enumerate() {
         if i == 0 { print!("{}", pred); }
