@@ -157,9 +157,10 @@ wrap_catch_unwind!(
         -> c_int | NEG1
     {
         unsafe {
+            let context = Context::from_raw_ptr_mut(ptr);
+            assert!(context.data.is_none(), "set options before loading data");
             let name = CStr::from_ptr(name).to_str().expect("invalid utf-8 in key");
             let value = CStr::from_ptr(value).to_str().expect("invalid utf-8 in value");
-            let context = Context::from_raw_ptr_mut(ptr);
             context.config.parse_record(name, value).unwrap();
         }
         0

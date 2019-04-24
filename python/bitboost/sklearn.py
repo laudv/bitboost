@@ -39,9 +39,9 @@ class BitBoost(BaseEstimator):
         nexamples, nfeatures = X.shape
 
         self._bitboost = RawBitBoost(nfeatures, nexamples)
+        self._bitboost.set_config(self.get_params())
         self._bitboost.set_data(X, self.categorical_features)
         self._bitboost.set_target(y)
-        self._bitboost.set_config(self.get_params())
 
         self._bitboost.train()
 
