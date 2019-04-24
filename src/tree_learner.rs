@@ -6,8 +6,12 @@
 
 use std::ops::{Add, Sub};
 use std::mem::size_of;
+use std::sync::{Mutex};
 
 use log::{warn, debug};
+
+use rayon::prelude::*;
+use rayon::iter::repeat;
 
 use crate::{NumT, CatT};
 use crate::config::Config;
@@ -63,6 +67,7 @@ impl Add for HistVal {
 // ------------------------------------------------------------------------------------------------
 
 /// Contains information about the current node to split.
+#[derive(Debug)]
 struct Node2Split {
     node_id: usize,
     example_count: u32,
@@ -404,6 +409,7 @@ where 'a: 'b {
                    parent_n2s.node_id, child_n2s.node_id, zero_count, n_u32, zero_ratio);
 
             let n_u32_child = n_u32 - zero_count; // number of non-zero blocks in child
+            assert!(n_u32_child > 0, "compression: all blocks zero?");
             self.compress_examples(parent_n2s, &mut child_n2s, n_u32_child);
         }
         child_n2s
@@ -712,17 +718,47 @@ macro_rules! build_histograms {
         fn $f(this: &mut TreeLearner, n2s: &Node2Split) {
             get_grad_sum!(get_grad_sum, $bsl, $sum_method);
 
-            for &feat_id in this.dataset.active_features() {
-                // For each possible split, compute left grad & count stats
-                let nbins = this.dataset.get_nbins(feat_id);
-                for split_id in 0..nbins {
-                    let fmask = this.dataset.get_bitvec(feat_id, split_id);
-                    let (grad_sum, example_count) = get_grad_sum(this, n2s, &fmask);
+            let grad_bounds = this.objective.bounds();
+            let dataset = this.dataset;
+            let mask_store = &this.ctx.mask_store;
+            let grad_store = &this.ctx.grad_store;
+            let idx_store = &this.ctx.idx_store;
+            let config = this.ctx.config;
+
+            //for &feat_id in this.dataset.active_features() {
+            //    // For each possible split, compute left grad & count stats
+            //    let nbins = this.dataset.get_nbins(feat_id);
+            //    for split_id in 0..nbins {
+            //        let fmask = dataset.get_bitvec(feat_id, split_id);
+            //        let (grad_sum, example_count) = get_grad_sum(n2s, &fmask,
+            //                                                     mask_store, grad_store, idx_store,
+            //                                                     grad_bounds, config);
+            //        let histval = HistVal { grad_sum, example_count };
+            //        let hist = this.ctx.hist_store.get_hist_mut(n2s.hists_range, feat_id);
+            //        hist[split_id] = histval;
+            //    }
+            //}
+
+            let hist_store = Mutex::new(&mut this.ctx.hist_store);
+            dataset.active_features()
+                .par_iter()
+                .flat_map(|&feat_id: &usize| {
+                    let nbins = dataset.get_nbins(feat_id);
+                    repeat(feat_id).zip(0..nbins)
+                })
+                .map(|(feat_id, split_id)| {
+                    let fmask = dataset.get_bitvec(feat_id, split_id);
+                    let (grad_sum, example_count) = get_grad_sum(n2s, &fmask,
+                                                                 mask_store, grad_store, idx_store,
+                                                                 grad_bounds, config);
                     let histval = HistVal { grad_sum, example_count };
-                    let hist = this.ctx.hist_store.get_hist_mut(n2s.hists_range, feat_id);
+                    (feat_id, split_id, histval)
+                })
+                .for_each(|(feat_id, split_id, histval)| {
+                    let mut hist_store = hist_store.lock().expect("failed to acquire lock");
+                    let hist = hist_store.get_hist_mut(n2s.hists_range, feat_id);
                     hist[split_id] = histval;
-                }
-            }
+                });
         }
     }
 }
@@ -765,36 +801,34 @@ macro_rules! get_grad_sum {
         }
     };
     ($f:ident, $bsl:ident, simd) => {
-        fn $f(this: &TreeLearner, n2s: &Node2Split, fmask: &BitVecRef) -> (NumT, u32) {
-            fn sum_uc(this: &TreeLearner, n2s: &Node2Split, fmask: &BitVecRef) -> (NumT, u32) {
-                let bounds = this.objective.bounds();
-                let ems = this.ctx.mask_store.get_bitvec(n2s.mask_range);
-                let grads = this.ctx.grad_store.get_bitslice::<$bsl>(n2s.grad_range);
+        fn $f(n2s: &Node2Split,
+              fmask: &BitVecRef,
+              mask_store: &BitBlockStore,
+              grad_store: &BitBlockStore,
+              idx_store: &BitBlockStore,
+              grad_bounds: (NumT, NumT),
+              config: &Config)
+            -> (NumT, u32)
+        {
+            let ems = mask_store.get_bitvec(n2s.mask_range);
+            let grads = grad_store.get_bitslice::<$bsl>(n2s.grad_range);
 
+            if !n2s.compressed {
                 let count = ems.count_ones_and(&fmask) as u32;
-                if count < this.ctx.config.min_examples_leaf { return (0.0, count); }
+                if count < config.min_examples_leaf { return (0.0, count); }
                 let sum = unsafe { grads.sum_all_masked2_unsafe(&ems, &fmask) };
-                let sum = $bsl::linproj(sum as NumT, count as NumT, bounds);
+                let sum = $bsl::linproj(sum as NumT, count as NumT, grad_bounds);
+
                 (sum, count)
-            }
-
-            fn sum_c(this: &TreeLearner, n2s: &Node2Split, fmask: &BitVecRef) -> (NumT, u32) {
-                let bounds = this.objective.bounds();
-                let ems = this.ctx.mask_store.get_bitvec(n2s.mask_range);
-                let grads = this.ctx.grad_store.get_bitslice::<$bsl>(n2s.grad_range);
-                let indices = this.ctx.idx_store.get_bitvec(n2s.idx_range);
-
-                let count = unsafe { ems.count_ones_and_compr_unsafe(&indices, &fmask) };
-                let count = count as u32;
-                if count < this.ctx.config.min_examples_leaf { return (0.0, count); }
-
+            } else {
+                let indices = idx_store.get_bitvec(n2s.idx_range);
+                let count = unsafe { ems.count_ones_and_compr_unsafe(&indices, &fmask) } as u32;
+                if count < config.min_examples_leaf { return (0.0, count); }
                 let sum = unsafe { grads.sum_all_masked2_compr_unsafe(&indices, &ems, &fmask) };
-                let sum = $bsl::linproj(sum as NumT, count as NumT, bounds);
+                let sum = $bsl::linproj(sum as NumT, count as NumT, grad_bounds);
+
                 (sum, count)
             }
-
-            if !n2s.compressed { sum_uc(this, n2s, fmask) }
-            else               { sum_c(this, n2s, fmask)  }
         }
     }
 }

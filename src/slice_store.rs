@@ -7,11 +7,11 @@
 use std::alloc;
 use std::borrow::{Borrow, BorrowMut};
 use std::fmt::Debug;
-use std::mem::{size_of, align_of};
-use std::ptr;
-use std::ops::{Sub, Deref, DerefMut};
-use std::slice;
 use std::marker::PhantomData;
+use std::mem::{size_of, align_of};
+use std::ops::{Sub, Deref, DerefMut};
+use std::ptr;
+use std::slice;
 
 use fnv::FnvHashMap as HashMap;
 use num::{Integer, PrimInt};
@@ -167,6 +167,7 @@ where T: Clone {
     }
 
     pub fn alloc_slice(&mut self, len: u32, value: T) -> SliceRange {
+        assert!(len > 0);
         // Check if we can use a free range
         // Note that we forget the full length of a slice when a shorter slice replaces a longer
         // previously freed slice.
@@ -217,6 +218,8 @@ where T: Clone {
     }
 }
 
+unsafe impl <T: Clone + Send> Send for SliceStore<T> {}
+unsafe impl <T: Clone + Sync> Sync for SliceStore<T> {}
 
 
 
@@ -264,7 +267,7 @@ where T: Clone + Default {
         let (lo, hi) = self.get_histogram_range(feat_id);
         &mut self.slice_store.get_slice_mut(hists_range)[lo..hi]
     }
-    
+
     pub fn hists_subtract(&mut self, parent_range: SliceRange, left_range: SliceRange,
                           right_range: SliceRange)
     where T: Sub<Output=T> {
@@ -331,7 +334,7 @@ impl BitBlockStore {
     }
 
     pub fn alloc_zero_blocks(&mut self, nblocks: usize) -> SliceRange {
-        debug_assert!(nblocks < u32::max_value() as usize);
+        assert!(nblocks < u32::max_value() as usize);
         self.slice_store.alloc_slice(nblocks as u32, BitBlock::zeros())
     }
 

@@ -12,8 +12,9 @@ from bitboost.bitboost import RawBitBoost
 import numpy as np
 import sklearn.metrics
 
-nfeatures = 5
+nfeatures = 200
 nexamples = 1000000
+np.random.seed(0)
 data = np.random.choice(np.array([0.0, 1.0, 2.0], dtype=RawBitBoost.numt),
                         size=(nexamples * 2, nfeatures))
 target = ((data[:, 0] > 1.0)
@@ -24,8 +25,6 @@ dtrain, ttrain = data[0:nexamples, :], target[0:nexamples]
 dtest, ttest = data[nexamples:, :], target[nexamples:]
 
 bb = RawBitBoost(nfeatures, nexamples)
-bb.set_data(dtrain, cat_features = set(range(nfeatures)))
-bb.set_target(ttrain)
 bb.set_config({
     "objective": "hinge",
     "discr_nbits": 2,
@@ -34,7 +33,9 @@ bb.set_config({
     "niterations": 10,
     "metric_frequency": 0,
     "metrics": "binary_error"})
-bbt = timeit.timeit(lambda: bb.train(), number=10)
+bb.set_data(dtrain, cat_features = set(range(nfeatures)))
+bb.set_target(ttrain)
+bbt = timeit.timeit(lambda: bb.train(), number=5)
 print(f"bitboost: {bbt/10} sec")
 predictions = bb.predict()
 
@@ -60,11 +61,11 @@ param = {
         'max_depth': 5,
         'num_round': 10,
         'learning_rate': 0.2,
-        'nthread': 1
+        #'nthread': 1
 }
 bst = xgb.train(param, dtrain)
 
-xgbt = timeit.timeit(lambda: xgb.train(param, dtrain), number=10)
+xgbt = timeit.timeit(lambda: xgb.train(param, dtrain), number=5)
 print(f"xgboost: {xgbt/10} sec")
 
 predictions = bst.predict(dtrain, output_margin=True)

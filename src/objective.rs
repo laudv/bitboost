@@ -8,7 +8,7 @@ use crate::{NumT, EPSILON, POS_INF, NEG_INF};
 use crate::config::Config;
 use crate::binner::Binner;
 
-pub trait Objective {
+pub trait Objective: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// The gradient values: the tree learner uses these to build the tree with L2 loss, regardless
