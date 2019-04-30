@@ -8,7 +8,7 @@ use num::{Integer, One};
 
 use std::mem::{size_of};
 use std::slice;
-use std::ops::{BitAnd, BitOr, Shr, Shl, Not};
+use std::ops::{BitAnd, BitOr, Shr, Shl, Not, Deref, DerefMut};
 
 use std::convert::From;
 
@@ -217,9 +217,160 @@ impl Default for BitBlock {
     fn default() -> Self { BitBlock::zeros() }
 }
 
+
+
+
+
+
+
+// - Array of BitBlocks ---------------------------------------------------------------------------
+
+pub struct BitBlocks {
+    blocks: Vec<BitBlock>,
+}
+
+impl BitBlocks {
+    pub fn zero_blocks(nblocks: usize) -> BitBlocks {
+        assert!(nblocks > 0);
+        BitBlocks {
+            blocks: vec![BitBlock::zeros(); nblocks],
+        }
+    }
+
+    pub fn one_blocks(nblocks: usize) -> BitBlocks {
+        assert!(nblocks > 0);
+        BitBlocks {
+            blocks: vec![BitBlock::ones(); nblocks],
+        }
+    }
+
+    pub fn zero_bits(nbits: usize) -> BitBlocks {
+        let nblocks = BitBlock::blocks_required_for(nbits);
+        Self::zero_blocks(nblocks)
+    }
+
+    pub fn one_bits(nbits: usize) -> BitBlocks {
+        let nblocks = BitBlock::blocks_required_for(nbits);
+        let mut blocks = Self::one_blocks(nblocks);
+
+        //if let Some(last) = blocks.get_slice_mut(range).last_mut() {
+        if let Some(last) = blocks.deref_mut().last_mut() {
+            let u64s = last.cast_mut::<u64>();  // zero out the last bits
+            let mut zeros = nblocks * BitBlock::nbits() - nbits;
+            let mut i = u64s.len()-1;
+            loop {
+                if zeros >= 64 { u64s[i] = 0; }
+                else           { u64s[i] >>= zeros; }
+
+                if zeros > 64 { zeros -= 64; i -= 1; }
+                else          { break; }
+            }
+        }
+
+        blocks
+    }
+
+    pub fn from_iter<T, I>(nvalues: usize, mut iter: I) -> BitBlocks
+    where T: Integer + Copy,
+          I: Iterator<Item = T>,
+    {
+        let nblocks = BitBlock::blocks_required_for(nvalues * size_of::<T>() * 8);
+        let mut blocks = Self::zero_blocks(nblocks);
+        for i in 0..nblocks {
+            let (_, block) = BitBlock::from_iter(&mut iter);
+            blocks[i] = block;
+        }
+        blocks
+    }
+
+    pub fn from_bool_iter<I>(nbits: usize, mut iter: I) -> BitBlocks
+    where I: Iterator<Item = bool>,
+    {
+        let nblocks = BitBlock::blocks_required_for(nbits);
+        let mut blocks = Self::zero_blocks(nblocks);
+        for i in 0..nblocks {
+            let (_, block) = BitBlock::from_bool_iter(&mut iter);
+            blocks[i] = block;
+        }
+        blocks
+    }
+
+    pub fn block_len<T: Integer>(&self) -> usize {
+        let nblocks = self.blocks.len();
+        nblocks * (BitBlock::nbytes() / size_of::<T>())
+    }
+
+    pub fn cast<T: Integer>(&self) -> &[T] {
+        let sz = self.block_len::<T>();
+        let ptr = self.as_ptr() as *const T;
+        unsafe { slice::from_raw_parts(ptr, sz) }
+    }
+
+    pub fn cast_mut<T: Integer>(&mut self) -> &mut [T] {
+        let ptr = self.as_mut_ptr() as *mut T;
+        let sz = self.block_len::<T>();
+        unsafe { slice::from_raw_parts_mut(ptr, sz) }
+    }
+
+    pub fn get<T: Integer>(&self, index: usize) -> &T {
+        &self.cast::<T>()[index]
+    }
+
+    pub unsafe fn get_unchecked<T: Integer>(&self, index: usize) -> &T {
+        safety_check!(index < self.block_len::<T>());
+        let ptr = self.as_ptr() as *const T;
+        &*ptr.add(index)
+    }
+
+    pub fn set<T: Integer + Copy>(&mut self, index: usize, value: T) {
+        self.cast_mut::<T>()[index] = value;
+    }
+
+    pub unsafe fn set_unchecked<T: Integer + Copy>(&mut self, index: usize, value: T) {
+        safety_check!(index < self.block_len::<T>());
+        let ptr = self.as_mut_ptr() as *mut T;
+        *&mut *ptr.add(index) = value;
+    }
+
+    pub fn resize(&mut self, nblocks: usize) {
+        assert!(nblocks > 0);
+        self.blocks.resize(nblocks, BitBlock::zeros());
+    }
+
+    pub fn reset(&mut self) {
+        self.blocks.clear();
+    }
+}
+
+impl Deref for BitBlocks {
+    type Target = [BitBlock];
+    fn deref(&self) -> &[BitBlock] { &self.blocks }
+}
+
+impl DerefMut for BitBlocks {
+    fn deref_mut(&mut self) -> &mut [BitBlock] { &mut self.blocks }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ------------------------------------------------------------------------------------------------
+
+
 #[cfg(test)]
 mod test {
-    use super::{BitBlock, BITBLOCK_BYTES};
+    use super::*;
 
     #[test]
     fn test_bitblock0() {
@@ -299,5 +450,133 @@ mod test {
         assert!(bb.cast::<u64>()[1] == 0x0);
         bb.set_bit(127, true);
         assert!(bb.get_bit(127) == true);
+    }
+
+
+    // bitblocks
+
+    #[test]
+    fn bitvec_basic() {
+        let n = 10_000;
+
+        let mut blocks = BitBlocks::from_iter::<u32, _>(n, 0u32..n as u32);
+        for i in 0..n {
+            assert_eq!(blocks.cast::<u32>()[i], i as u32);
+            assert_eq!(*blocks.get::<u32>(i), i as u32);
+
+            blocks.set::<u32>(i, 0);
+            assert_eq!(blocks.cast::<u32>()[i], 0);
+            assert_eq!(*blocks.get::<u32>(i), 0);
+
+            blocks.cast_mut::<u32>()[i] = (n - i) as u32;
+        }
+
+        for i in 0..n {
+            assert_eq!(blocks.cast::<u32>()[i], (n - i) as u32);
+            assert_eq!(*blocks.get::<u32>(i), (n - i) as u32);
+        }
+    }
+
+    #[test]
+    fn bitvec_from_bool_iter() {
+        let n = 10_000;
+        let f = |k| k<n && k%13==1;
+        let iter = (0..n).map(f);
+
+        let blocks = BitBlocks::from_bool_iter(n, iter.clone());
+
+        for (i, block) in blocks.iter().enumerate() {
+            for j in 0..BitBlock::nbits() {
+                let k = i*BitBlock::nbits() + j;
+                let b = f(k);
+                assert_eq!(b, block.get_bit(j));
+            }
+        }
+    }
+
+    #[test]
+    fn bitvec_from_iter() {
+        let n = 4367;
+        let f = |i| if i >= n as u32 { 0 } else { 101*i+13 };
+
+        let mut blocks = BitBlocks::from_iter(n, (0u32..n as u32).map(f));
+
+        for (i, &b_u32) in blocks.cast::<u32>().iter().enumerate() {
+            assert_eq!(b_u32, f(i as u32));
+        }
+
+        for i in 0..n {
+            assert_eq!(*blocks.get::<u32>(i), f(i as u32));
+        }
+
+        for i in 0..n {
+            unsafe {
+                assert_eq!(*blocks.get_unchecked::<u32>(i), f(i as u32));
+            }
+        }
+
+        for i in 0..n { blocks.set::<u32>(i, f(i as u32) + 10); }
+        for i in 0..n { assert_eq!(*blocks.get::<u32>(i), f(i as u32) + 10); }
+    }
+
+    #[test]
+    fn bitvec_cast_len() {
+        let n = 13456;
+        let f = |k| k<n && k%31==1;
+        let iter = (0..n).map(f);
+
+        let blocks = BitBlocks::from_bool_iter(n, iter);
+
+        assert_eq!(blocks.len(), n / 256 + 1);
+        assert_eq!(blocks.cast::<u128>().len(), blocks.len() * 2);
+        assert_eq!(blocks.cast::<u64>().len(), blocks.len() * 4);
+        assert_eq!(blocks.cast::<u32>().len(), blocks.len() * 8);
+        assert_eq!(blocks.cast::<u16>().len(), blocks.len() * 16);
+        assert_eq!(blocks.cast::<u8>().len(), blocks.len() * 32);
+
+        for (i, qword) in blocks.cast::<u64>().iter().enumerate() {
+            for j in 0..64 {
+                let b = f(i*64 + j);
+                assert_eq!(b, qword >> j & 0x1 == 0x1);
+            }
+        }
+    }
+
+    #[test]
+    fn bitvec_zeros_end() {
+        // allocate some memory
+        let blocks = BitBlocks::from_iter(3, 10u32..13u32);
+        assert_eq!(blocks.cast::<u32>()[1], 11);
+        assert_eq!(blocks.cast::<u32>().iter().cloned().last().unwrap(), 0);
+
+        for _ in 0..100 {
+            let blocks = BitBlocks::from_iter(3, 10u32..13u32);
+            for (i, &b_u32) in blocks.cast::<u32>().iter().enumerate() {
+                if i < 3 { assert_eq!(b_u32, (10+i) as u32); }
+                else     { assert_eq!(b_u32, 0); }
+            }
+
+            let blocks = BitBlocks::from_bool_iter(32, (0..32).map(|_| true));
+            for (i, &b_u32) in blocks.cast::<u32>().iter().enumerate() {
+                if i == 0 { assert_eq!(b_u32, 0xFFFFFFFF); }
+                else      { assert_eq!(b_u32, 0); }
+            }
+        }
+    }
+
+    #[test]
+    fn bitvec_one_bits() {
+        let blocks = BitBlocks::one_bits(50);
+
+        let v = blocks.cast::<u32>();
+        assert_eq!(v.len(), 8);
+        assert_eq!(v[0], 0xFFFFFFFF);
+        assert_eq!(v[1], 0x3FFFF);
+        assert_eq!(v[2], 0);
+        assert_eq!(v[3], 0);
+        assert_eq!(v[4], 0);
+        assert_eq!(v[5], 0);
+        assert_eq!(v[6], 0);
+        assert_eq!(v[7], 0);
     }
 }
