@@ -22,6 +22,8 @@ pub mod data;
 pub mod dataset;
 pub mod bitblock;
 pub mod simd;
+pub mod bitset;
+pub mod bitslice;
 pub mod slice_store;
 pub mod tree;
 pub mod tree_learner;
