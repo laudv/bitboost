@@ -22,6 +22,7 @@ pub mod data;
 pub mod dataset;
 pub mod bitblock;
 pub mod simd;
+pub mod harley_seal;
 pub mod bitset;
 pub mod bitslice;
 pub mod slice_store;

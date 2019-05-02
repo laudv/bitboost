@@ -53,6 +53,10 @@ impl FullBitset {
         let j = index % BitBlock::nbits();
         self.blocks[i].enable_bit(j)
     }
+
+    pub fn into_bitset(self) -> Bitset {
+        Bitset::Full(self)
+    }
 }
 
 impl Deref for FullBitset {
@@ -78,7 +82,9 @@ pub struct CompressedBitset {
 }
 
 impl CompressedBitset {
-
+    pub fn into_bitset(self) -> Bitset {
+        Bitset::Compressed(self)
+    }
 }
 
 
@@ -92,6 +98,28 @@ pub enum Bitset {
     Compressed(CompressedBitset),
 }
 
+impl Bitset {
+    pub fn count_ones_and(b1: &Bitset, b2: &Bitset) -> u64 {
+        use Bitset::*;
+
+        match (b1, b2) {
+            (Full(ref full1), Full(ref full2)) => {
+
+            },
+            (Compressed(ref compr), Full(ref full)) |
+            (Full(ref full), Compressed(ref compr)) => {
+
+            },
+            (Compressed(ref compr1), Compressed(ref compr2)) => {
+            },
+        }
+        0
+    }
+
+    pub fn compress_into(b1: &FullBitset, compr: &mut CompressedBitset) {
+        unimplemented!()
+    }
+}
 
 
 
