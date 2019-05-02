@@ -27,7 +27,6 @@ pub mod bitset;
 pub mod bitslice;
 pub mod slice_store;
 pub mod tree;
-pub mod tree_learner;
 pub mod objective;
 pub mod binner;
 pub mod metric;

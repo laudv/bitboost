@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::data::{Data};
 use crate::dataset::Dataset;
 use crate::tree::{AdditiveTree};
-use crate::tree_learner::{TreeLearnerContext, TreeLearner};
+use crate::tree::{TreeLearnerContext, TreeLearner};
 use crate::objective::{Objective};
 use crate::metric::Metric;
 

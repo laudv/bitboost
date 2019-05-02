@@ -17,7 +17,7 @@ use bitboost::data::Data;
 use bitboost::dataset::Dataset;
 use bitboost::objective::{Objective, objective_from_name};
 use bitboost::tree::{AdditiveTree, Tree};
-use bitboost::tree_learner::{TreeLearner, TreeLearnerContext};
+use bitboost::tree::{TreeLearner, TreeLearnerContext};
 use bitboost::metric::{Metric, metrics_from_names};
 use bitboost::boost::Booster;
 
