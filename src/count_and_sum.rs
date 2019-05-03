@@ -48,7 +48,7 @@ unsafe trait HarleySealInternals {
     unsafe fn reduce_total(total: __m256i, ws: Self::Weights) -> u64;
 }
 
-pub type HarleySealWeights32 = (u8, u8, u8, u8, u8, u8, u8, u8);
+type HarleySealWeights32 = (u8, u8, u8, u8, u8, u8, u8, u8);
 struct Internals32;
 unsafe impl HarleySealInternals for Internals32 {
     type Weights = HarleySealWeights32;
@@ -98,7 +98,7 @@ unsafe impl HarleySealInternals for Internals32 {
     }
 }
 
-pub type HarleySealWeights64 = (u8, u8, u8, u8);
+type HarleySealWeights64 = (u8, u8, u8, u8);
 struct Internals64;
 unsafe impl HarleySealInternals for Internals64 {
     type Weights = HarleySealWeights64;
@@ -222,7 +222,7 @@ where LoadFn: Fn(&Input, usize) -> __m256i
 #[allow(unused_macros)]
 macro_rules! loadfn {
     ($name:ident < Uncompressed > () ) => {
-        pub fn $name(&(bset1,          bset2):
+        fn $name(&(bset1,          bset2):
                      &(*const __m256i, *const __m256i),
                      index: usize)
             -> __m256i
@@ -235,8 +235,8 @@ macro_rules! loadfn {
         }
     };
 
-    ($name:ident < Compressed1 > () ) => {
-        pub fn $name(&(indexes1,       bset1,          bset2):
+    ($name:ident < Compressed10 > () ) => {
+        fn $name(&(indexes1,       bset1,          bset2):
                      &(*const __m256i, *const __m256i, *const __m256i),
                      index: usize) 
             -> __m256i
@@ -250,7 +250,7 @@ macro_rules! loadfn {
     };
 
     ($name:ident < Uncompressed > ( $in:ident ) ) => {
-        pub fn $name(&(bitslice,       bset1,          bset2):
+        fn $name(&(bitslice,       bset1,          bset2):
                      &(*const __m256i, *const __m256i, *const __m256i),
                      index: usize)
             -> __m256i
@@ -266,10 +266,10 @@ macro_rules! loadfn {
         }
     };
 
-    ($name:ident < Compressed1 > ( $in:ident ) ) => {
-        pub fn $name(&(bitslice,       indexes1,       bset1,          bset2):
-                     &(*const __m256i, *const __m256i, *const __m256i, *const __m256i),
-                     index: usize)
+    ($name:ident < Compressed10 > ( $in:ident ) ) => {
+        fn $name(&(bitslice,       indexes1,       bset1,          bset2):
+                 &(*const __m256i, *const __m256i, *const __m256i, *const __m256i),
+                 index: usize)
             -> __m256i
         {
             unsafe {
@@ -283,6 +283,23 @@ macro_rules! loadfn {
         }
     };
 
+    ($name:ident < Compressed01 > ( $in:ident ) ) => {
+        fn $name(&(bitslice,       bset1,          indexes2,       bset2):
+                 &(*const __m256i, *const __m256i, *const __m256i, *const __m256i),
+                 index: usize)
+            -> __m256i
+        {
+            unsafe {
+                let slice = loadfn!(@select $in: indexes2, bitslice, index);
+                let mask1 = loadfn!(@gather $in: indexes2, bset1, index);
+                let mask2 = loadfn!(@load   $in: bset2, index);
+                let maskx = loadfn!(@and    $in: mask1, mask2);
+                let maskx = loadfn!(@expand $in: maskx);
+                _mm256_and_si256(slice, maskx)
+            }
+        }
+    };
+
     // 8-bit discretization
     (@load   u32: $bset:expr, $index:expr) => {{ *($bset as *const u32).add($index) }};
     (@and    u32: $m1:expr, $m2:expr) => {{ $m1 & $m2 }};
@@ -291,19 +308,22 @@ macro_rules! loadfn {
         let v64 = (((v32 as u64) << 32) | v32 as u64) as i64;
         _mm256_set1_epi64x(v64)
     }};
-    (@gather u32: $indexes:expr, $bset:expr, $index:expr) => {{
+    (@gather u32: $indexes:ident, $bset:expr, $index:expr) => {{
         let index = *(($indexes as *const u32).add($index)) as usize;
         *($bset as *const u32).add(index)
+    }};
+    (@select u32: $indexes:ident, $slice:expr, $index:expr) => {{
+        let index = *(($indexes as *const u32).add($index)) as usize;
+        _mm256_load_si256($slice.add(index))
     }};
 
     // 4-bit discretization
     (@load   u64: $bset:expr, $index:expr) => {{ *($bset as *const u64).add($index) }};
     (@and    u64: $v1:expr, $v2:expr) => {{ $v1 & $v2 }};
     (@expand u64: $value:expr) => {{ let v64 = $value; _mm256_set1_epi64x(v64 as i64) }};
-    (@gather u64: $indexes:expr, $bset:expr, $index:expr) => {{
-        let indexes = $indexes;
-        let index1 = *((indexes as *const u32).add(2*$index  )) as usize;
-        let index2 = *((indexes as *const u32).add(2*$index+1)) as usize;
+    (@gather u64: $indexes:ident, $bset:expr, $index:expr) => {{
+        let index1 = *(($indexes as *const u32).add(2*$index  )) as usize;
+        let index2 = *(($indexes as *const u32).add(2*$index+1)) as usize;
         // 1  1   2  2   3  3   4  4
         // m1 m2  m1 m2  m1 m2  m1 m2
         //
@@ -312,15 +332,23 @@ macro_rules! loadfn {
         let bset = $bset as *const u32;
         (*bset.add(index1) as u64) | ((*bset.add(index2) as u64) << 32)
     }};
+    (@select u64: $indexes:ident, $slice:expr, $index:expr) => {{
+        let index = *(($indexes as *const u32).add(2 * $index)) as usize;
+        _mm256_load_si256($slice.add(index / 2))
+    }};
 
     // 2-bit discretization
     (@load   __m128i: $bset:expr, $index:expr) => {{
         _mm_load_si128(($bset as *const __m128i).add($index)) }};
     (@and    __m128i: $v1:expr, $v2:expr) => {{ _mm_and_si128($v1, $v2) }};
     (@expand __m128i: $value:expr) => {{ let v128 = $value; _mm256_set_m128i(v128, v128) }};
-    (@gather __m128i: $indexes:expr, $bset:expr, $index:expr) => {{
+    (@gather __m128i: $indexes:ident, $bset:expr, $index:expr) => {{
         let indexes = _mm_load_si128(($indexes as *const __m128i).add($index));
         _mm_i32gather_epi32($bset as *const i32, indexes, 4)
+    }};
+    (@select __m128i: $indexes:ident, $slice:expr, $index:expr) => {{
+        let index = *(($indexes as *const u32).add(4 * $index)) as usize;
+        _mm256_load_si256($slice.add(index / 4))
     }};
 
     // 1-bit discretization
@@ -328,109 +356,118 @@ macro_rules! loadfn {
         _mm256_load_si256(($bset as *const __m256i).add($index)) }};
     (@and    __m256i: $v1:expr, $v2:expr) => {{ _mm256_and_si256($v1, $v2) }};
     (@expand __m256i: $value:expr) => {{ $value }};
-    (@gather __m256i: $indexes:expr, $bset:expr, $index:expr) => {{
+    (@gather __m256i: $indexes:ident, $bset:expr, $index:expr) => {{
         let indexes = _mm256_load_si256(($indexes as *const __m256i).add($index));
         _mm256_i32gather_epi32($bset as *const i32, indexes, 4)
+    }};
+    (@select __m256i: $indexes:ident, $slice:expr, $index:expr) => {{
+        let index = *(($indexes as *const u32).add(8 * $index)) as usize;
+        _mm256_load_si256($slice.add(index / 8))
     }}
 }
 
 
-loadfn!(load_and2_uc<Uncompressed>());
-loadfn!(load_and2_c1<Compressed1>());
+loadfn!(load_and2_c00<Uncompressed>());
+loadfn!(load_and2_c10<Compressed10>());
 
-loadfn!(load_and3_w1_uc<Uncompressed>(__m256i));
-loadfn!(load_and3_w2_uc<Uncompressed>(__m128i));
-loadfn!(load_and3_w4_uc<Uncompressed>(u64));
-loadfn!(load_and3_w8_uc<Uncompressed>(u32));
+loadfn!(load_and3_w1_c00<Uncompressed>(__m256i));
+loadfn!(load_and3_w2_c00<Uncompressed>(__m128i));
+loadfn!(load_and3_w4_c00<Uncompressed>(u64));
+loadfn!(load_and3_w8_c00<Uncompressed>(u32));
 
-loadfn!(load_and3_w1_c1<Compressed1>(__m256i));
-loadfn!(load_and3_w2_c1<Compressed1>(__m128i));
-loadfn!(load_and3_w4_c1<Compressed1>(u64));
-loadfn!(load_and3_w8_c1<Compressed1>(u32));
+loadfn!(load_and3_w1_c10<Compressed10>(__m256i));
+loadfn!(load_and3_w2_c10<Compressed10>(__m128i));
+loadfn!(load_and3_w4_c10<Compressed10>(u64));
+loadfn!(load_and3_w8_c10<Compressed10>(u32));
+
+loadfn!(load_and3_w1_c01<Compressed01>(__m256i));
+loadfn!(load_and3_w2_c01<Compressed01>(__m128i));
+loadfn!(load_and3_w4_c01<Compressed01>(u64));
+loadfn!(load_and3_w8_c01<Compressed01>(u32));
 
 
 
 
 
 
-// - Harley-Seal based counting and summing: uncompressed and compressed1 -------------------------
+// - Harley-Seal based counting and summing: uncompressed, compressed10,and compressed01 ----------
 
-pub fn count_and2_uc(blocks1: &BitBlocks, blocks2: &BitBlocks) -> u64 {
+pub fn count_and2_c00(blocks1: &BitBlocks, blocks2: &BitBlocks) -> u64 {
     let ptr1 = blocks1.as_ptr() as *const __m256i;
     let ptr2 = blocks2.as_ptr() as *const __m256i;
-    harley_seal64(&(ptr1, ptr2), blocks1.len(), load_and2_uc, (1, 1, 1, 1))
+    harley_seal64(&(ptr1, ptr2), blocks1.len(), load_and2_c00, (1, 1, 1, 1))
 }
 
-pub fn count_and2_c1(indexes1: &BitBlocks, blocks1: &BitBlocks, blocks2: &BitBlocks) -> u64 {
+pub fn count_and2_c10(indexes1: &BitBlocks, blocks1: &BitBlocks, blocks2: &BitBlocks) -> u64 {
     let idxs = indexes1.as_ptr() as *const __m256i;
     let ptr1 = blocks1.as_ptr() as *const __m256i;
     let ptr2 = blocks2.as_ptr() as *const __m256i;
-    harley_seal64(&(idxs, ptr1, ptr2), blocks1.len(), load_and2_c1, (1, 1, 1, 1))
+    harley_seal64(&(idxs, ptr1, ptr2), blocks1.len(), load_and2_c10, (1, 1, 1, 1))
 }
 
-pub fn sum_and3_w1_uc(bitslice: &BitBlocks, bset1: &BitBlocks, bset2: &BitBlocks) -> u64 {
+pub fn sum_and3_w1_c00(bitslice: &BitBlocks, bset1: &BitBlocks, bset2: &BitBlocks) -> u64 {
     let slice = bitslice.as_ptr() as *const __m256i;
     let ptr1 = bset1.as_ptr() as *const __m256i;
     let ptr2 = bset2.as_ptr() as *const __m256i;
-    harley_seal64(&(slice, ptr1, ptr2), bitslice.len(), load_and3_w1_uc, (1, 1, 1, 1))
+    harley_seal64(&(slice, ptr1, ptr2), bitslice.len(), load_and3_w1_c00, (1, 1, 1, 1))
 }
 
-pub fn sum_and3_w2_uc(bitslice: &BitBlocks, bset1: &BitBlocks, bset2: &BitBlocks) -> u64 {
+pub fn sum_and3_w2_c00(bitslice: &BitBlocks, bset1: &BitBlocks, bset2: &BitBlocks) -> u64 {
     let slice = bitslice.as_ptr() as *const __m256i;
     let ptr1 = bset1.as_ptr() as *const __m256i;
     let ptr2 = bset2.as_ptr() as *const __m256i;
-    harley_seal64(&(slice, ptr1, ptr2), bitslice.len(), load_and3_w2_uc, (1, 1, 2, 2))
+    harley_seal64(&(slice, ptr1, ptr2), bitslice.len(), load_and3_w2_c00, (1, 1, 2, 2))
 }
 
-pub fn sum_and3_w4_uc(bitslice: &BitBlocks, bset1: &BitBlocks, bset2: &BitBlocks) -> u64 {
+pub fn sum_and3_w4_c00(bitslice: &BitBlocks, bset1: &BitBlocks, bset2: &BitBlocks) -> u64 {
     let slice = bitslice.as_ptr() as *const __m256i;
     let ptr1 = bset1.as_ptr() as *const __m256i;
     let ptr2 = bset2.as_ptr() as *const __m256i;
-    harley_seal64(&(slice, ptr1, ptr2), bitslice.len(), load_and3_w4_uc, (1, 2, 4, 8))
+    harley_seal64(&(slice, ptr1, ptr2), bitslice.len(), load_and3_w4_c00, (1, 2, 4, 8))
 }
 
-pub fn sum_and3_w8_uc(bitslice: &BitBlocks, bset1: &BitBlocks, bset2: &BitBlocks) -> u64 {
+pub fn sum_and3_w8_c00(bitslice: &BitBlocks, bset1: &BitBlocks, bset2: &BitBlocks) -> u64 {
     let slice = bitslice.as_ptr() as *const __m256i;
     let ptr1 = bset1.as_ptr() as *const __m256i;
     let ptr2 = bset2.as_ptr() as *const __m256i;
-    harley_seal32(&(slice, ptr1, ptr2), bitslice.len(), load_and3_w8_uc,
+    harley_seal32(&(slice, ptr1, ptr2), bitslice.len(), load_and3_w8_c00,
                   (1, 2, 4, 8, 16, 32, 64, 128))
 }
 
-pub fn sum_and3_w1_c1(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks,
+pub fn sum_and3_w1_c10(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks,
                       bset2: &BitBlocks) -> u64 {
     let slice = bitslice.as_ptr() as *const __m256i;
     let idxs = idxs1.as_ptr() as *const __m256i;
     let ptr1 = bset1.as_ptr() as *const __m256i;
     let ptr2 = bset2.as_ptr() as *const __m256i;
-    harley_seal64(&(slice, idxs, ptr1, ptr2), bitslice.len(), load_and3_w1_c1, (1, 1, 1, 1))
+    harley_seal64(&(slice, idxs, ptr1, ptr2), bitslice.len(), load_and3_w1_c10, (1, 1, 1, 1))
 }
 
-pub fn sum_and3_w2_c1(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks,
+pub fn sum_and3_w2_c10(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks,
                       bset2: &BitBlocks) -> u64 {
     let slice = bitslice.as_ptr() as *const __m256i;
     let idxs = idxs1.as_ptr() as *const __m256i;
     let ptr1 = bset1.as_ptr() as *const __m256i;
     let ptr2 = bset2.as_ptr() as *const __m256i;
-    harley_seal64(&(slice, idxs, ptr1, ptr2), bitslice.len(), load_and3_w2_c1, (1, 1, 2, 2))
+    harley_seal64(&(slice, idxs, ptr1, ptr2), bitslice.len(), load_and3_w2_c10, (1, 1, 2, 2))
 }
 
-pub fn sum_and3_w4_c1(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks,
+pub fn sum_and3_w4_c10(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks,
                       bset2: &BitBlocks) -> u64 {
     let slice = bitslice.as_ptr() as *const __m256i;
     let idxs = idxs1.as_ptr() as *const __m256i;
     let ptr1 = bset1.as_ptr() as *const __m256i;
     let ptr2 = bset2.as_ptr() as *const __m256i;
-    harley_seal64(&(slice, idxs, ptr1, ptr2), bitslice.len(), load_and3_w4_c1, (1, 2, 4, 8))
+    harley_seal64(&(slice, idxs, ptr1, ptr2), bitslice.len(), load_and3_w4_c10, (1, 2, 4, 8))
 }
 
-pub fn sum_and3_w8_c1(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks,
+pub fn sum_and3_w8_c10(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks,
                       bset2: &BitBlocks) -> u64 {
     let slice = bitslice.as_ptr() as *const __m256i;
     let idxs = idxs1.as_ptr() as *const __m256i;
     let ptr1 = bset1.as_ptr() as *const __m256i;
     let ptr2 = bset2.as_ptr() as *const __m256i;
-    harley_seal32(&(slice, idxs, ptr1, ptr2), bitslice.len(), load_and3_w8_c1,
+    harley_seal32(&(slice, idxs, ptr1, ptr2), bitslice.len(), load_and3_w8_c10,
                   (1, 2, 4, 8, 16, 32, 64, 128))
 }
 
@@ -439,56 +476,84 @@ pub fn sum_and3_w8_c1(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks
 
 
 
-// - Compressed2: does not fit well in Harley-Seal template ---------------------------------------
 
-macro_rules! sum_and3_wx_c2 {
-    ($name:ident, $width:expr, $layout:ident) => {
-        pub fn $name(bitslice: &BitBlocks, idxs1: &BitBlocks, bset1: &BitBlocks,
-                     idxs2: &BitBlocks, bset2: &BitBlocks) -> u64 {
-            let mut i1 = 0;
-            let mut i2 = 0;
-            let mut sums = [0u64; $width];
-            let idxs1 = idxs1.cast::<u32>();
-            let idxs2 = idxs2.cast::<u32>();
-            let bset1 = bset1.cast::<u32>();
-            let bset2 = bset2.cast::<u32>();
-            let bitslice = BitsliceWithLayout::<_, $layout>::for_bitblocks(bitslice);
+// - Non-Harley-Seal based counting: compressed11; does not fit well in Harley-Seal template ------
 
-            safety_check!(idxs1.len() == bset1.len());
-            safety_check!(idxs2.len() == bset2.len());
-
-            while i1 < idxs1.len() && i2 < idxs2.len() {
-                let idx1 = unsafe { idxs1.get_unchecked(i1) };
-                let idx2 = unsafe { idxs2.get_unchecked(i2) };
-
-                if idx1 < idx2      { i1 += 1; }
-                else if idx1 > idx2 { i2 += 1; }
-                else { // equal!
-                    let m1 = unsafe { bset1.get_unchecked(i1) };
-                    let m2 = unsafe { bset2.get_unchecked(i2) };
-                    let m = m1 & m2;
-                    for lane in 0..$width {
-                        let block = unsafe { bitslice.get_block_unchecked(i1, lane) };
-                        sums[lane] += (block & m).count_ones() as u64;
-                    }
-                    i1 += 1;
-                    i2 += 1;
-                }
-            }
-
-            let mut sum = 0;
-            for lane in 0..$width {
-                sum += (1<<lane) * sums[lane];
-            }
-            sum
+macro_rules! count_and_sum_c11 {
+    (count_and2_c11) => {
+        pub fn count_and2_c11(idxs1: &BitBlocks, bset1: &BitBlocks,
+                             idxs2: &BitBlocks, bset2: &BitBlocks) -> u64 {
+            count_and_sum_c11!(@body count: idxs1, bset1, idxs2, bset2, 1, ())
         }
     };
+
+    (sum_and3_wx_c11: $name:ident, $width:expr, $layout:ident) => {
+        pub fn $name(bitslice: &BitBlocks,
+                     idxs1: &BitBlocks, bset1: &BitBlocks,
+                     idxs2: &BitBlocks, bset2: &BitBlocks) -> u64 {
+            count_and_sum_c11!(@body sum: idxs1, bset1, idxs2, bset2, $width,
+                               BitsliceWithLayout::<_, $layout>::for_bitblocks(bitslice))
+        }
+    };
+
+    (@body $count_or_sum:ident: $idxs1:expr, $bset1:expr, $idxs2:expr, $bset2:expr,
+           $width:expr, $bitslice:expr) => {{
+        let mut i1 = 0;
+        let mut i2 = 0;
+        let mut sums = [0u64; $width];
+        let idxs1 = $idxs1.cast::<u32>();
+        let idxs2 = $idxs2.cast::<u32>();
+        let bset1 = $bset1.cast::<u32>();
+        let bset2 = $bset2.cast::<u32>();
+
+        #[allow(unused_variables)]
+        let bitslice = $bitslice;
+
+        safety_check!(idxs1.len() == bset1.len());
+        safety_check!(idxs2.len() == bset2.len());
+
+        while i1 < idxs1.len() && i2 < idxs2.len() {
+            let idx1 = unsafe { idxs1.get_unchecked(i1) };
+            let idx2 = unsafe { idxs2.get_unchecked(i2) };
+
+            if idx1 < idx2      { i1 += 1; }
+            else if idx1 > idx2 { i2 += 1; }
+            else { // equal!
+                let m1 = unsafe { bset1.get_unchecked(i1) };
+                let m2 = unsafe { bset2.get_unchecked(i2) };
+                let mask = m1 & m2;
+                for lane in 0..$width {
+                    let sum = unsafe { sums.get_unchecked_mut(lane) };
+                    let block = count_and_sum_c11!(@load $count_or_sum: bitslice, mask, i1, lane);
+                    *sum += block.count_ones() as u64;
+                }
+                i1 += 1;
+                i2 += 1;
+            }
+        }
+
+        let mut sum = 0;
+        for lane in 0..$width {
+            sum += (1<<lane) * sums[lane];
+        }
+        sum
+    }};
+
+    (@load sum:   $bitslice:expr, $mask:expr, $index:expr, $lane:expr) => {{
+        let block = unsafe { $bitslice.get_block_unchecked($index, $lane) };
+        block & $mask
+    }};
+
+    (@load count: $bitslice:expr, $mask:expr, $index:expr, $lane:expr) => {{
+        $mask
+    }}
 }
 
-sum_and3_wx_c2!(sum_and3_w1_c2, 1, BitsliceLayout1);
-sum_and3_wx_c2!(sum_and3_w2_c2, 2, BitsliceLayout2);
-sum_and3_wx_c2!(sum_and3_w4_c2, 4, BitsliceLayout4);
-sum_and3_wx_c2!(sum_and3_w8_c2, 8, BitsliceLayout8);
+count_and_sum_c11!(count_and2_c11);
+count_and_sum_c11!(sum_and3_wx_c11: sum_and3_w1_c11, 1, BitsliceLayout1);
+count_and_sum_c11!(sum_and3_wx_c11: sum_and3_w2_c11, 2, BitsliceLayout2);
+count_and_sum_c11!(sum_and3_wx_c11: sum_and3_w4_c11, 4, BitsliceLayout4);
+count_and_sum_c11!(sum_and3_wx_c11: sum_and3_w8_c11, 8, BitsliceLayout8);
 
 
 
@@ -514,7 +579,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn harley_seal_count_ones_and_uc() {
+    fn test_count_and2_c00() {
         let n = 20_000;
         let seed = 112;
         let mut sum = 0;
@@ -532,14 +597,14 @@ mod test {
         let bset1_ptr = bset1.as_ptr() as *const __m256i;
         let bset2_ptr = bset2.as_ptr() as *const __m256i;
         let sum_harley_seal1 = harley_seal64(&(bset1_ptr, bset2_ptr), bset1.len(),
-                                             load_and2_uc, (1, 1, 1, 1));
-        let sum_harley_seal2 = count_and2_uc(&bset1, &bset2);
+                                             load_and2_c00, (1, 1, 1, 1));
+        let sum_harley_seal2 = count_and2_c00(&bset1, &bset2);
         assert_eq!(sum, sum_harley_seal1);
         assert_eq!(sum, sum_harley_seal2);
     }
 
     #[test]
-    fn harley_seal_count_ones_and_c_1() {
+    fn test_count_and2_c10_1() {
         let m1 = 4*128;
         let m2 = 4*1024;
         let seed = 112;
@@ -560,14 +625,14 @@ mod test {
         let bset1_ptr = bset1.as_ptr() as *const __m256i;
         let bset2_ptr = bset2.as_ptr() as *const __m256i;
         let sum_harley_seal1 = harley_seal64(&(indexes_ptr, bset1_ptr, bset2_ptr),
-                                             bset1.len(), load_and2_c1, (1, 1, 1, 1));
-        let sum_harley_seal2 = count_and2_c1(&indexes, &bset1, &bset2);
+                                             bset1.len(), load_and2_c10, (1, 1, 1, 1));
+        let sum_harley_seal2 = count_and2_c10(&indexes, &bset1, &bset2);
         assert_eq!(sum, sum_harley_seal1);
         assert_eq!(sum, sum_harley_seal2);
     }
 
     #[test]
-    fn harley_seal_count_ones_and_c_2() {
+    fn test_count_and2_c10_2() {
         let m1 = 4*128;
         let m2 = 4*1024;
         let seed = 92;
@@ -592,21 +657,25 @@ mod test {
         let bset1_ptr = bset1.as_ptr() as *const __m256i;
         let bset2_ptr = bset2.as_ptr() as *const __m256i;
         let sum_harley_seal1 = harley_seal64(&(indexes_ptr, bset1_ptr, bset2_ptr),
-                                             bset1.len(), load_and2_c1, (1, 1, 1, 1));
-        let sum_harley_seal2 = count_and2_c1(&indexes, &bset1, &bset2);
+                                             bset1.len(), load_and2_c10, (1, 1, 1, 1));
+        let sum_harley_seal2 = count_and2_c10(&indexes, &bset1, &bset2);
         assert_eq!(sum, sum_harley_seal1);
         assert_eq!(sum, sum_harley_seal2);
     }
 
     #[test]
-    fn harley_seal_sum_uc() {
-        sum_uc::<BitsliceLayout1>(20);
-        sum_uc::<BitsliceLayout2>(111);
-        sum_uc::<BitsliceLayout4>(222);
-        sum_uc::<BitsliceLayout8>(333);
+    fn test_count_and2_c11() {
     }
 
-    fn sum_uc<L>(seed: usize)
+    #[test]
+    fn test_sum_and3_c00() {
+        sum_c00::<BitsliceLayout1>(20);
+        sum_c00::<BitsliceLayout2>(111);
+        sum_c00::<BitsliceLayout4>(222);
+        sum_c00::<BitsliceLayout8>(333);
+    }
+
+    fn sum_c00<L>(seed: usize)
     where L: BitsliceLayout
     {
         let n = 20_000;
@@ -645,18 +714,18 @@ mod test {
         let w8 = (1, 2, 4, 8, 16, 32, 64, 128);
 
         let sum_harley_seal1 = match L::width() {
-            1 => { harley_seal64(&(bitslice_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w1_uc, w1) }
-            2 => { harley_seal64(&(bitslice_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w2_uc, w2) }
-            4 => { harley_seal64(&(bitslice_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w4_uc, w4) }
-            8 => { harley_seal32(&(bitslice_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w8_uc, w8) }
+            1 => { harley_seal64(&(bitslice_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w1_c00, w1) }
+            2 => { harley_seal64(&(bitslice_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w2_c00, w2) }
+            4 => { harley_seal64(&(bitslice_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w4_c00, w4) }
+            8 => { harley_seal32(&(bitslice_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w8_c00, w8) }
             _ => { panic!() }
         };
 
         let sum_harley_seal2 = match L::width() {
-            1 => { sum_and3_w1_uc(bitslice.as_bitblocks(), &bset1, &bset2) }
-            2 => { sum_and3_w2_uc(bitslice.as_bitblocks(), &bset1, &bset2) }
-            4 => { sum_and3_w4_uc(bitslice.as_bitblocks(), &bset1, &bset2) }
-            8 => { sum_and3_w8_uc(bitslice.as_bitblocks(), &bset1, &bset2) }
+            1 => { sum_and3_w1_c00(bitslice.as_bitblocks(), &bset1, &bset2) }
+            2 => { sum_and3_w2_c00(bitslice.as_bitblocks(), &bset1, &bset2) }
+            4 => { sum_and3_w4_c00(bitslice.as_bitblocks(), &bset1, &bset2) }
+            8 => { sum_and3_w8_c00(bitslice.as_bitblocks(), &bset1, &bset2) }
             _ => { panic!() }
         };
 
@@ -665,14 +734,14 @@ mod test {
     }
 
     #[test]
-    fn harley_seal_sum_c1() {
-        sum_c1::<BitsliceLayout1>(20);
-        sum_c1::<BitsliceLayout2>(111);
-        sum_c1::<BitsliceLayout4>(222);
-        sum_c1::<BitsliceLayout8>(333);
+    fn test_sum_and3_c10() {
+        sum_c10::<BitsliceLayout1>(20);
+        sum_c10::<BitsliceLayout2>(111);
+        sum_c10::<BitsliceLayout4>(222);
+        sum_c10::<BitsliceLayout8>(333);
     }
 
-    fn sum_c1<L>(seed: usize)
+    fn sum_c10<L>(seed: usize)
     where L: BitsliceLayout
     {
         let m1 = 2048;
@@ -719,18 +788,18 @@ mod test {
         let w8 = (1, 2, 4, 8, 16, 32, 64, 128);
 
         let sum_harley_seal1 = match L::width() {
-            1 => { harley_seal64(&(bitslice_ptr, indexes1_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w1_c1, w1) }
-            2 => { harley_seal64(&(bitslice_ptr, indexes1_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w2_c1, w2) }
-            4 => { harley_seal64(&(bitslice_ptr, indexes1_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w4_c1, w4) }
-            8 => { harley_seal32(&(bitslice_ptr, indexes1_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w8_c1, w8) }
+            1 => { harley_seal64(&(bitslice_ptr, indexes1_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w1_c10, w1) }
+            2 => { harley_seal64(&(bitslice_ptr, indexes1_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w2_c10, w2) }
+            4 => { harley_seal64(&(bitslice_ptr, indexes1_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w4_c10, w4) }
+            8 => { harley_seal32(&(bitslice_ptr, indexes1_ptr, bset1_ptr, bset2_ptr), nblocks, load_and3_w8_c10, w8) }
             _ => { panic!() }
         };
 
         let sum_harley_seal2 = match L::width() {
-            1 => { sum_and3_w1_c1(bitslice.as_bitblocks(), &indexes, &bset1, &bset2) }
-            2 => { sum_and3_w2_c1(bitslice.as_bitblocks(), &indexes, &bset1, &bset2) }
-            4 => { sum_and3_w4_c1(bitslice.as_bitblocks(), &indexes, &bset1, &bset2) }
-            8 => { sum_and3_w8_c1(bitslice.as_bitblocks(), &indexes, &bset1, &bset2) }
+            1 => { sum_and3_w1_c10(bitslice.as_bitblocks(), &indexes, &bset1, &bset2) }
+            2 => { sum_and3_w2_c10(bitslice.as_bitblocks(), &indexes, &bset1, &bset2) }
+            4 => { sum_and3_w4_c10(bitslice.as_bitblocks(), &indexes, &bset1, &bset2) }
+            8 => { sum_and3_w8_c10(bitslice.as_bitblocks(), &indexes, &bset1, &bset2) }
             _ => { panic!() }
         };
 
@@ -739,14 +808,14 @@ mod test {
     }
 
     #[test]
-    fn non_harley_seal_sum_c2() {
-        sum_c2::<BitsliceLayout1>();
-        sum_c2::<BitsliceLayout2>();
-        sum_c2::<BitsliceLayout4>();
-        sum_c2::<BitsliceLayout8>();
+    fn test_sum_and3_c11() {
+        sum_c11::<BitsliceLayout1>();
+        sum_c11::<BitsliceLayout2>();
+        sum_c11::<BitsliceLayout4>();
+        sum_c11::<BitsliceLayout8>();
     }
 
-    fn sum_c2<L>()
+    fn sum_c11<L>()
     where L: BitsliceLayout
     {
         let m = L::nunique_values();
@@ -797,50 +866,14 @@ mod test {
         println!("indexes2 {:?}", &indexes2.cast::<u32>()[0..4]);
 
         let sum = match L::width() {
-            1 => { sum_and3_w1_c2(bitslice.as_bitblocks(), &indexes1, &bset1, &indexes2, &bset2) }
-            2 => { sum_and3_w2_c2(bitslice.as_bitblocks(), &indexes1, &bset1, &indexes2, &bset2) }
-            4 => { sum_and3_w4_c2(bitslice.as_bitblocks(), &indexes1, &bset1, &indexes2, &bset2) }
-            8 => { sum_and3_w8_c2(bitslice.as_bitblocks(), &indexes1, &bset1, &indexes2, &bset2) }
+            1 => { sum_and3_w1_c11(bitslice.as_bitblocks(), &indexes1, &bset1, &indexes2, &bset2) }
+            2 => { sum_and3_w2_c11(bitslice.as_bitblocks(), &indexes1, &bset1, &indexes2, &bset2) }
+            4 => { sum_and3_w4_c11(bitslice.as_bitblocks(), &indexes1, &bset1, &indexes2, &bset2) }
+            8 => { sum_and3_w8_c11(bitslice.as_bitblocks(), &indexes1, &bset1, &indexes2, &bset2) }
             _ => { panic!() }
         };
 
         println!("sum {}, check {}", sum, sum_check);
         assert_eq!(sum, sum_check);
-
-
-        //for i in 0..32*m1 {
-        //    let k = ((((1123*i) % m + 51) % m + seed) % m) as u8;
-        //    let b = (((1123*i) % 3 + 51) % 3 + seed) % 3 == 1;
-        //    view.set_value(i, k);
-        //    bset1.set_bit(i, b);
-        //}
-
-        //for i in 0..32*m2 {
-        //    let b = (((7165*i) % 3 + 97) % 2 + seed) % 2 == 1;
-        //    bset2.set_bit(i, b);
-        //}
-
-        //let mut sum = 0;
-        //for 
-
-        //panic!();
-
-        //let bitslice_ptr = bitslice.as_bitblocks().as_ptr() as *const __m256i;
-        //let indexes1_ptr = indexes1.as_ptr() as *const __m256i;
-        //let bset1_ptr = bset1.as_ptr() as *const __m256i;
-        //let bset2_ptr = bset2.as_ptr() as *const __m256i;
-
-        //let w1 = (1, 1, 1, 1);
-        //let w2 = (1, 1, 2, 2);
-        //let w4 = (1, 2, 4, 8);
-        //let w8 = (1, 2, 4, 8, 16, 32, 64, 128);
-
-        //let sum_harley_seal2 = match L::width() {
-        //    1 => { sum_and3_w1_c1(bitslice.as_bitblocks(), &indexes1, &bset1, &bset2) }
-        //    2 => { sum_and3_w2_c1(bitslice.as_bitblocks(), &indexes1, &bset1, &bset2) }
-        //    4 => { sum_and3_w4_c1(bitslice.as_bitblocks(), &indexes1, &bset1, &bset2) }
-        //    8 => { sum_and3_w8_c1(bitslice.as_bitblocks(), &indexes1, &bset1, &bset2) }
-        //    _ => { panic!() }
-        //};
     }
 }
