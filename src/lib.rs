@@ -6,8 +6,8 @@
 
 #[macro_export]
 macro_rules! safety_check {
-    //($assertion:expr) => { assert!($assertion); } // enabled
-    ($assertion:expr) => {} // disabled
+    ($assertion:expr) => { assert!($assertion); } // enabled
+    //($assertion:expr) => {} // disabled
 }
 
 pub type NumT = f32; // numeric type
@@ -22,7 +22,7 @@ pub mod data;
 pub mod dataset;
 pub mod bitblock;
 pub mod simd;
-pub mod harley_seal;
+pub mod count_and_sum;
 pub mod bitset;
 pub mod bitslice;
 pub mod slice_store;

@@ -4,15 +4,9 @@
  * Written by Laurens Devos, 2019
 */
 
-use std::sync::Arc;
+pub mod learn;
 
-use crate::bitblock::BitBlocks;
-use crate::bitset::Bitset;
-use crate::bitslice::Bitslice;
-
-
-
-
+// TODO remove
 mod learner;
 pub use self::learner::{TreeLearner, TreeLearnerContext};
 

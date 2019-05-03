@@ -236,6 +236,10 @@ impl BitBlocks {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+
     pub fn zero_blocks(nblocks: usize) -> BitBlocks {
         assert!(nblocks > 0);
         BitBlocks {

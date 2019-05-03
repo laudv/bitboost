@@ -11,21 +11,19 @@ use crate::bitblock::{BitBlock, BitBlocks};
 
 
 
-// - Compressed -----------------------------------------------------------------------------------
-
-pub struct FullBitset {
+pub struct Bitset {
     blocks: BitBlocks,
 }
 
-impl FullBitset {
-    pub fn zeros(nbits: usize) -> FullBitset {
-        FullBitset { 
+impl Bitset {
+    pub fn zeros(nbits: usize) -> Bitset {
+        Bitset {
             blocks: BitBlocks::zero_bits(nbits)
         }
     }
 
-    pub fn ones(nbits: usize) -> FullBitset {
-        FullBitset { 
+    pub fn ones(nbits: usize) -> Bitset {
+        Bitset {
             blocks: BitBlocks::one_bits(nbits)
         }
     }
@@ -53,71 +51,18 @@ impl FullBitset {
         let j = index % BitBlock::nbits();
         self.blocks[i].enable_bit(j)
     }
-
-    pub fn into_bitset(self) -> Bitset {
-        Bitset::Full(self)
-    }
 }
 
-impl Deref for FullBitset {
+impl Deref for Bitset {
     type Target = BitBlocks;
     fn deref(&self) -> &BitBlocks {
         &self.blocks
     }
 }
 
-impl DerefMut for FullBitset {
+impl DerefMut for Bitset {
     fn deref_mut(&mut self) -> &mut BitBlocks {
         &mut self.blocks
-    }
-}
-
-
-
-// - Compressed -----------------------------------------------------------------------------------
-
-pub struct CompressedBitset {
-    indexes: BitBlocks,
-    blocks: BitBlocks,
-}
-
-impl CompressedBitset {
-    pub fn into_bitset(self) -> Bitset {
-        Bitset::Compressed(self)
-    }
-}
-
-
-
-
-
-// - Either a full or a compressed bitset: choose dynamically -------------------------------------
-
-pub enum Bitset {
-    Full(FullBitset),
-    Compressed(CompressedBitset),
-}
-
-impl Bitset {
-    pub fn count_ones_and(b1: &Bitset, b2: &Bitset) -> u64 {
-        use Bitset::*;
-
-        match (b1, b2) {
-            (Full(ref full1), Full(ref full2)) => {
-
-            },
-            (Compressed(ref compr), Full(ref full)) |
-            (Full(ref full), Compressed(ref compr)) => {
-
-            },
-            (Compressed(ref compr1), Compressed(ref compr2)) => {
-            },
-        }
-        0
-    }
-
-    pub fn compress_into(b1: &FullBitset, compr: &mut CompressedBitset) {
-        unimplemented!()
     }
 }
 
@@ -138,7 +83,7 @@ mod test {
 
     #[test]
     fn full_basic() {
-        let bs = FullBitset::ones(3);
+        let bs = Bitset::ones(3);
         assert_eq!(bs.get_bit(0), true);
         assert_eq!(bs.get_bit(1), true);
         assert_eq!(bs.get_bit(2), true);
