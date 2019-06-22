@@ -67,7 +67,7 @@ class BitBoost(BaseEstimator):
         self._bitboost.set_data(X)
         return self._bitboost.predict()
 
-    def _check_sklearn_estimator():
+    def _check_sklearn_estimator(self):
         check_estimator(BitBoost)
 
 

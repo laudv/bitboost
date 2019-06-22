@@ -151,7 +151,7 @@ class RawBitBoost:
     def write_model(self):
         raise Exception("not implemented")
 
-    def read_model():
+    def read_model(self):
         raise Exception("not implemented")
 
 
