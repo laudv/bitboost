@@ -167,13 +167,13 @@ class BitBoostConfigParam:
         s = ""
         default = self.default_value_str()
         descr = "\n        ".join(textwrap.wrap(self.descr, 80))
-        s += f"\n    {self.name} : {self.type_str} (default {default})"
-        s += f"\n        {descr}\n"
+        s += "\n    {} : {} (default {})".format(self.name, self.type_str, default)
+        s += "\n        {}\n".format(descr)
         return s
 
     def default_value_str(self):
         if self.type_str == "String":
-            return f"\"{self.default}\""
+            return "\"{}\"".format(self.default)
         return self.default
 
 def get_config_params():
@@ -196,10 +196,10 @@ def gen_config_doc(config_params):
 def gen_init_fun(config_params, filename):
     source = "def __init__(self"
     for name, item in config_params.items():
-        source += f", {name}={item.default_value_str()}"
+        source += ", {}={}".format(name, item.default_value_str())
     source += "):\n"
     for name, item in config_params.items():
-        source += f"    self.{name}={name}\n"
+        source += "    self.{}={}\n".format(name, name)
     
     _locals = {}
     exec(source, None, _locals)
