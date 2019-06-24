@@ -128,7 +128,22 @@ impl Tree {
                 SplitType::HiCardCatLt => {
                     debug_assert!(!self.supercats.is_empty(), "tree supercats not set?");
                     safety_check!(self.supercats.len() > feat_id);
-                    let spcat = self.supercats[feat_id][into_cat(value) as usize];
+                    let supercats = &self.supercats[feat_id];
+                    let cat_value = into_cat(value) as usize;
+
+                    //if cat_value >= supercats.len() { // debugging
+                    //    println!("cat_value = {:?}", cat_value);
+                    //    println!("supercats = {:?}", supercats);
+                    //    println!("feat_id   = {:?}", feat_id);
+                    //    println!("card      = {:?}", data.feat_card(feat_id));
+                    //    println!("limits    = {:?}", data.feat_limits(feat_id));
+                    //}
+
+                    // If training set did not contain certain (high) categorical value, then this
+                    // could fail. Choose an invalid supercat value and go right if this is the
+                    // case.
+                    let spcat = if cat_value < supercats.len() { supercats[cat_value] }
+                                else                           { supercats.len() as CatT };
                     let split_value = into_cat(split_value);
                     node_id = if spcat <= split_value { self.left_child(node_id) }
                               else                    { self.right_child(node_id) }

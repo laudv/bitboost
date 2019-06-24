@@ -91,7 +91,7 @@ class RawBitBoost:
 
     def _check(self):
         if not self._ctx_ptr:
-            raise Exception("use with-statement to ensure memory safety")
+            raise Exception("no BitBoost context")
 
     def set_feature_data(self, feat_id, data, is_categorical):
         self._check()
@@ -99,6 +99,7 @@ class RawBitBoost:
         assert data.dtype == self.numt
         assert 0 <= feat_id and feat_id <= self._nfeatures
         assert isinstance(is_categorical, bool) 
+        data = data.copy() # make copy to ensure congiguous, not optimal
         data_ptr = data.ctypes.data_as(self.numt_p)
         is_cat = 1 if is_categorical else 0
         self._rust_set_fdata(self._ctx_ptr, feat_id, data_ptr, is_cat)
@@ -114,8 +115,7 @@ class RawBitBoost:
 
         for feat_id in range(self._nfeatures):
             is_cat = feat_id in cat_features
-            column = data[:,feat_id].copy() # make copy to ensure congiguous, not optimal
-            self.set_feature_data(feat_id, column, is_cat)
+            self.set_feature_data(feat_id, data[:,feat_id], is_cat)
     
     def set_target(self, data):
         self._check()
