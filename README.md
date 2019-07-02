@@ -1,9 +1,13 @@
+[![Build Status](https://travis-ci.org/laudv/bitboost.svg?branch=master)](https://travis-ci.org/laudv/bitboost)
+
 # BitBoost
 
 BitBoost is a gradient boosting decision tree model similar to [XGBoost],
 [LightGBM], and [CatBoost]. Unlike these systems, BitBoost uses bitslices to
 represent discretized gradients and bitsets to represent the data vectors and
 the instance lists, with the goal of improving learning speed.
+
+***Note:*** this is an experimental system.
 
 ## Compiling
 
@@ -56,10 +60,9 @@ objectives are in [src/objective.rs](src/objective.rs).
 
 # Paper: Fast Gradient Boosting Decision Trees with Bit-Level Data Structures
 
-All experiments in the paper used commit 7468a41.
+Check out the [experiments](https://github.com/laudv/bitboost/tree/experiments)
+branch to see the experimental setup.
 
-The datasets are available at
-[bitboost-datasets](https://github.com/laurens-devos/bitboost-datasets).
 
 
 
