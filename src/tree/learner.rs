@@ -725,40 +725,40 @@ macro_rules! build_histograms {
             let idx_store = &this.ctx.idx_store;
             let config = this.ctx.config;
 
-            //for &feat_id in this.dataset.active_features() {
-            //    // For each possible split, compute left grad & count stats
-            //    let nbins = this.dataset.get_nbins(feat_id);
-            //    for split_id in 0..nbins {
-            //        let fmask = dataset.get_bitvec(feat_id, split_id);
-            //        let (grad_sum, example_count) = get_grad_sum(n2s, &fmask,
-            //                                                     mask_store, grad_store, idx_store,
-            //                                                     grad_bounds, config);
-            //        let histval = HistVal { grad_sum, example_count };
-            //        let hist = this.ctx.hist_store.get_hist_mut(n2s.hists_range, feat_id);
-            //        hist[split_id] = histval;
-            //    }
-            //}
-
-            let hist_store = Mutex::new(&mut this.ctx.hist_store);
-            dataset.active_features()
-                .par_iter()
-                .flat_map(|&feat_id: &usize| {
-                    let nbins = dataset.get_nbins(feat_id);
-                    repeat(feat_id).zip(0..nbins)
-                })
-                .map(|(feat_id, split_id)| {
+            for &feat_id in this.dataset.active_features() {
+                // For each possible split, compute left grad & count stats
+                let nbins = this.dataset.get_nbins(feat_id);
+                for split_id in 0..nbins {
                     let fmask = dataset.get_bitvec(feat_id, split_id);
                     let (grad_sum, example_count) = get_grad_sum(n2s, &fmask,
                                                                  mask_store, grad_store, idx_store,
                                                                  grad_bounds, config);
                     let histval = HistVal { grad_sum, example_count };
-                    (feat_id, split_id, histval)
-                })
-                .for_each(|(feat_id, split_id, histval)| {
-                    let mut hist_store = hist_store.lock().expect("failed to acquire lock");
-                    let hist = hist_store.get_hist_mut(n2s.hists_range, feat_id);
+                    let hist = this.ctx.hist_store.get_hist_mut(n2s.hists_range, feat_id);
                     hist[split_id] = histval;
-                });
+                }
+            }
+
+            //let hist_store = Mutex::new(&mut this.ctx.hist_store);
+            //dataset.active_features()
+            //    .par_iter()
+            //    .flat_map(|&feat_id: &usize| {
+            //        let nbins = dataset.get_nbins(feat_id);
+            //        repeat(feat_id).zip(0..nbins)
+            //    })
+            //    .map(|(feat_id, split_id)| {
+            //        let fmask = dataset.get_bitvec(feat_id, split_id);
+            //        let (grad_sum, example_count) = get_grad_sum(n2s, &fmask,
+            //                                                     mask_store, grad_store, idx_store,
+            //                                                     grad_bounds, config);
+            //        let histval = HistVal { grad_sum, example_count };
+            //        (feat_id, split_id, histval)
+            //    })
+            //    .for_each(|(feat_id, split_id, histval)| {
+            //        let mut hist_store = hist_store.lock().expect("failed to acquire lock");
+            //        let hist = hist_store.get_hist_mut(n2s.hists_range, feat_id);
+            //        hist[split_id] = histval;
+            //    });
         }
     }
 }
