@@ -6,6 +6,8 @@ import xgboost as xgb
 import lightgbm as lgb
 import catboost as cat
 
+from sklearn import tree
+
 
 BITBOOST_PYTHON_PATH = os.path.join(os.path.dirname(__file__), "../python")
 if BITBOOST_PYTHON_PATH not in sys.path:
@@ -303,6 +305,43 @@ class BitModel(GBDTModel):
         pred_train = bb.predict()
         bb.set_data(self._bittest, cat_features=cat_features)
         pred_test  = bb.predict()
+
+        metric_train = self.compute_metric(self._train.target, pred_train)
+        metric_test  = self.compute_metric(self._test.target,  pred_test)
+
+        return (train_time, metric_train, metric_test)
+    
+
+class SkTree(GBDTModel):
+    def __init__(self):
+        super().__init__("sklearn_tree")
+        self._skparams = {}
+
+    def set_params(self, params):
+        super().set_params(params)
+        
+        assert params["objective"] == "binary"
+
+        self._skparams = {
+            "min_samples_leaf":      1, # match lgbm
+            "min_impurity_decrease": params["min_gain"],
+            "max_depth":             params["max_depth"],
+            "random_state":          params["random_seed"],
+            "max_features":          params["feature_fraction"],
+        }
+
+    def set_data(self, train, test):
+        super().set_data(train, test)
+
+    def train(self):
+        clf = tree.DecisionTreeClassifier(**self._skparams)
+
+        start_time = time.process_time()
+        clf.fit(self._train.data, self._train.target)
+        train_time = time.process_time() - start_time
+
+        pred_train = clf.predict(self._train.data)
+        pred_test  = clf.predict(self._test.data)
 
         metric_train = self.compute_metric(self._train.target, pred_train)
         metric_test  = self.compute_metric(self._test.target,  pred_test)

@@ -6,7 +6,7 @@ import datetime
 
 from functools import partial
 from sklearn.model_selection import KFold, train_test_split
-from gbdt_model import XGBModel, LGBModel, CatModel, BitModel, Dataset
+from gbdt_model import XGBModel, LGBModel, CatModel, BitModel, SkTree, Dataset
 from params import params_to_csv_row, params_to_csv_header
 
 
@@ -19,6 +19,8 @@ def get_model(model_name):
         return CatModel()
     elif model_name == "bit":
         return BitModel()
+    elif model_name == "sktree":
+        return SkTree()
     else:
         raise Exception("unknown model {}".format(model_name))
 
