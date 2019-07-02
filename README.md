@@ -61,7 +61,12 @@ objectives are in [src/objective.rs](src/objective.rs).
 # Paper: Fast Gradient Boosting Decision Trees with Bit-Level Data Structures
 
 Check out the [experiments](https://github.com/laudv/bitboost/tree/experiments)
-branch to see the experimental setup.
+branch to see the experimental setup, or quickly navigate to the results for:
+
+ - [Allsate](https://github.com/laudv/bitboost/blob/experiments/experiments/allstate/run-allstate.ipynb)
+ - [CoverType](https://github.com/laudv/bitboost/blob/experiments/experiments/covtype/run-covtype.ipynb)
+ - [Binary-MNIST](https://github.com/laudv/bitboost/blob/experiments/experiments/bin-mist/run-bin-mnist.ipynb)
+ - [YouTube](https://github.com/laudv/bitboost/blob/experiments/experiments/youtube/run-youtube.ipynb)
 
 
 
