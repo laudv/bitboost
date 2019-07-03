@@ -11,6 +11,7 @@ the instance lists, with the goal of improving learning speed.
 
  - BitBoost does not (yet) support multi-class classification,
  - BitBoost does not (yet) support proper multi-threading,
+ - BitBoost does not (yet) effectively handle sparse features,
  - BitBoost works best for low-cardinality categorical features,
  - BitBoost can handle high-cardinality categorical and numerical features efficiently given that (1) there are not too many and (2) only coarse-grained splits are required on those features, i.e., we can have high `sample_freq` and low `max_nbins` paramater values.
  
