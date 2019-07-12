@@ -19,10 +19,10 @@ the instance lists, with the goal of improving learning speed.
 
 ## Compiling
 
-BitBoost is implemented in Rust and uses the standard Rust tools, `cargo` and
+BitBoost is implemented in stable Rust and uses the [standard Rust tools][rustup], `cargo` and
 `rustc`.
 
- - Make sure you have Rust 2018 edition installed.
+ - Make sure you have Rust 2018 edition installed, that is, Rust 1.31 or higher.
  - Clone this repository.
  - Tell `rustc` to generate efficient [AVX2 instructions][AVX2] (ensure you have a AVX2
    capable CPU):
@@ -37,6 +37,15 @@ BitBoost is implemented in Rust and uses the standard Rust tools, `cargo` and
 
 
 ## Using BitBoost from Python
+
+BitBoost is not available on pip just yet. However, you can install a pip package on your local Linux system as follows.
+
+First, ensure you have [Rust][rustup] installed. Activate the Python3 environment of your liking, and run:
+```
+cd <bitboost-repo>/python
+python setup.py install [--user]
+```
+Use `--user` if you don't have write access to your site-packages directory. Test your installation with the following code snippet:
 
 ```python
 import numpy as np
@@ -65,7 +74,7 @@ train_acc = sklearn.metrics.mean_absolute_error(target, bit.predict(data))
 
 ## Running from the Command Line
 
-Use the `bitboost` binary to run BitBoost from the command line:
+Use the `run_bitboost` binary to run BitBoost from the command line:
 
 
 ```
@@ -81,6 +90,8 @@ Use the `bitboost` binary to run BitBoost from the command line:
     discr_nbits=8 \
     max_nbins=16
 ```
+
+This only supports CSV input files.
 
 
 ## Python Interface
@@ -109,6 +120,7 @@ branch to see the experimental setup, or quickly navigate to the results for:
 
 
 
+[rustup]: https://rustup.rs
 [XGBoost]: https://xgboost.readthedocs.io
 [LightGBM]: https://lightgbm.readthedocs.io
 [CatBoost]: https://catboost.ai
