@@ -115,12 +115,15 @@ with open(os.path.join(CARGO_DIR, "README.md")) as f:
 with open(os.path.join(CARGO_DIR, "VERSION")) as f:
     VERSION = f.read().strip()
 
+with open(os.path.join(PYTHON_DIR, "requirements.txt")) as f:
+    install_requires = f.read().splitlines()
+
 setuptools.setup(
     name="bitboost",
     version=VERSION,
     author="Laurens Devos",
     maintainer="Laurens Devos",
-    install_requires=["sklearn", "numpy"],
+    install_requires=install_requires,
     description="BitBoost: fast gradient boosting with categorical data",
     long_description=LONG_DESCRIPTION,
     long_description_content_type="text/markdown",
