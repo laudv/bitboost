@@ -33,8 +33,7 @@ class BitBoost(BaseEstimator):
             Returns self.
         """
         X, y = check_X_y(X, y, accept_sparse=False, dtype=self.numt,
-                         order="F", # column-major
-                         warn_on_dtype=True)
+                         order="F") # column-major
 
         nexamples, nfeatures = X.shape
 

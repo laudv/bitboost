@@ -2,7 +2,8 @@ import sys
 import os
 import timeit
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../python"))
+# use local python package rather than the system install
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../python"))
 
 from bitboost import BitBoostClassifier
 import numpy as np

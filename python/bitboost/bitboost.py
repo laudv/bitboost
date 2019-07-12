@@ -10,31 +10,49 @@ from ctypes import *
 
 import numpy as np
 
-def _get_lib_dir():
+
+CONFIG_CSV = "bitboost_config.gen.csv"
+
+def _get_lib_path():
     d = os.path.dirname(__file__)
-    debug = os.path.join(d, "../../target/debug/libbitboost.so")
-    release = os.path.join(d, "../../target/release/libbitboost.so")
+    in_source_debug_so = os.path.join(d, "../../target/debug/libbitboost.so")
+    in_source_release_so = os.path.join(d, "../../target/release/libbitboost.so")
+    installed_so = os.path.join(d, "libbitboost.so")
 
-    debug_if = os.path.isfile(debug)
-    release_if = os.path.isfile(release)
+    if os.path.isfile(installed_so):
+        return installed_so
 
-    if debug_if and release_if:
+    d_isfile = os.path.isfile(in_source_debug_so)
+    r_isfile = os.path.isfile(in_source_release_so)
+    if d_isfile and r_isfile:
         # use debug if newer, warn
-        if os.path.getmtime(debug) > os.path.getmtime(release):
+        if os.path.getmtime(in_source_debug_so) > os.path.getmtime(in_source_release_so):
             print("WARNING: using newer BitBoost debug build")
-            return debug
+            return in_source_debug_so
         else:
-            return release
-    elif debug_if:
-        print("WARNING: using BitBoost debug build")
-        return debug
-    elif release_if:
-        return release
-    else:
-        raise Exception("BitBoost library not found")
+            return in_source_release_so
+    elif d_isfile:
+        return in_source_debug_so
+    elif r_isfile:
+        return in_source_release_so
+
+    raise Exception("BitBoost library could not be located")
+
+def _get_config_csv():
+    d = os.path.dirname(__file__)
+    in_source_config = os.path.join(d, "../", CONFIG_CSV)
+    installed_config = os.path.join(d, CONFIG_CSV)
+
+    if os.path.isfile(installed_config):
+        return installed_config
+    elif os.path.isfile(in_source_config):
+        return in_source_config
+
+    raise Exception("BitBoost config_csv not found")
 
 class RawBitBoost:
-    _lib = CDLL(_get_lib_dir())
+    _lib = CDLL(_get_lib_path())
+    print(_lib)
     _rust_numt_nbytes = _lib.bb_get_numt_nbytes
     _rust_numt_nbytes.argtypes = []
     _rust_numt_nbytes.restype = c_int
@@ -178,7 +196,7 @@ class BitBoostConfigParam:
 
 def get_config_params():
     config_params = {}
-    with open(os.path.join(os.path.dirname(__file__), "../bitboost_config.gen.csv")) as f:
+    with open(_get_config_csv()) as f:
         r = csv.reader(f)
         next(r)
         for row in r:

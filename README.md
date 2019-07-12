@@ -35,13 +35,41 @@ BitBoost is implemented in Rust and uses the standard Rust tools, `cargo` and
    ```
 
 
+
+## Using BitBoost from Python
+
+```python
+import numpy as np
+import sklearn.metrics
+
+from bitboost import BitBoostRegressor
+
+# Generate some categorical data
+nfeatures = 5
+nexamples = 10000
+data = np.random.choice(np.array([0.0, 1.0, 2.0], dtype=BitBoostRegressor.numt),
+                        size=(nexamples * 2, nfeatures))
+target = (1.22 * (data[:, 0] > 1.0)
+        + 0.65 * (data[:, 1] > 1.0)
+        + 0.94 * (data[:, 2] != 2.0)
+        + 0.13 * (data[:, 3] == 1.0)).astype(BitBoostRegressor.numt)
+
+# Run BitBoost
+bit = BitBoostRegressor(
+    objective="l2", discr_nbits=4, max_tree_depth=5, learning_rate=0.5,
+    niterations=20, categorical_features=list(range(nfeatures)))
+bit.fit(data, target)
+
+train_acc = sklearn.metrics.mean_absolute_error(target, bit.predict(data))
+```
+
 ## Running from the Command Line
 
 Use the `bitboost` binary to run BitBoost from the command line:
 
 
 ```
-./target/release/bitboost boost \
+./target/release/run_bitboost boost \
     train=/path/to/train.csv \
     test=/path/to/test.csv \
     objective=binary \
@@ -49,7 +77,9 @@ Use the `bitboost` binary to run BitBoost from the command line:
     learning_rate=0.5 \
     metrics=binary_error,binary_loss \
     categorical_features=0,1,2,3,4 \
-    sample_freq=10
+    sample_freq=10 \
+    discr_nbits=8 \
+    max_nbins=16
 ```
 
 
