@@ -76,7 +76,9 @@ class CustomInstall(install):
     """
     def run(self):
         self.run_command("build_rust")
-        super().run()
+        # https://github.com/pypa/setuptools/issues/456#issuecomment-202922033
+        #super().run() # does not install dependencies because it runs in backward-compatibile mode :-(
+        super().do_egg_install() # call this directly, as it should in super().run()
 
 class CustomInstallLib(install_lib):
     """
@@ -116,7 +118,7 @@ with open(os.path.join(CARGO_DIR, "VERSION")) as f:
     VERSION = f.read().strip()
 
 with open(os.path.join(PYTHON_DIR, "requirements.txt")) as f:
-    install_requires = f.read().splitlines()
+    install_requires = [pkg for pkg in f.read().splitlines() if len(pkg) > 0]
 
 setuptools.setup(
     name="bitboost",
