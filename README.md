@@ -7,6 +7,32 @@ BitBoost is a gradient boosting decision tree model similar to [XGBoost],
 represent discretized gradients and bitsets to represent the data vectors and
 the instance lists, with the goal of improving learning speed.
 
+BitBoost is able to beat the other boosting systems when a significant number of input features are categorical and have only few possible values (i.e., low cardinality). Here's are some numbers:
+
+Time (seconds):
+
+|   | [Allstate][dsa] | [Covtype1][dsc] | [Covtype2][dsc] | [Bin-MNIST][dsm] | [YouTube][dsy] |
+|---|----------|----------|----------|-----------|---------|
+| BitBoost Accurate | 4.8   | 17.1  | 10.7  | 4.5   | 14.3 |
+| BitBoost Fast     | 1.0   | 5.4   | 7.2   | 1.9   | 2.5  |
+| LightGBM          | 12.3  | 24.1  | 21.0  | 24.8  | 35.0 |
+| XGBoost           | 11.5  | 37.0  | 35.3  | 24.7  | 24.9 |
+| CatBoost          | 82.6  | 58.1  | 52.9  | 16.5  | 33.6 |
+
+
+Accuracy (MAE, Accuracy%, Accuracy%, Accuracy%, MAE):
+
+|   | [Allstate][dsa] | [Covtype1][dsc] | [Covtype2][dsc] | [Bin-MNIST][dsm] | [YouTube][dsy] |
+|---|----------|----------|----------|-----------|---------|
+| BitBoost Accurate | 1159  | 12.0  | 0.79  | 2.78  | 0.07 |
+| BitBoost Fast     | 1194  | 14.9  | 1.02  | 3.52  | 0.12 |
+| LightGBM          | 1156  | 11.9  | 0.71  | 2.86  | 0.07 |
+| XGBoost           | 1157  | 10.8  | 0.63  | 2.66  | 0.07 |
+| CatBoost          | 1167  | 13.1  | 0.91  | 3.23  | 0.11 |
+
+Click the column labels, or read the paper for more information.
+
+
 ***Note:*** this is an experimental system, and
 
  - BitBoost does not (yet) support multi-class classification,
@@ -72,6 +98,9 @@ bit.fit(data, target)
 train_acc = sklearn.metrics.mean_absolute_error(target, bit.predict(data))
 ```
 
+BitBoost has a [Scikit-learn](https://scikit-learn.org/stable/) interface. A number
+of examples are provided in the [examples](examples) folder.
+
 ## Running from the Command Line
 
 Use the `run_bitboost` binary to run BitBoost from the command line:
@@ -94,16 +123,19 @@ Use the `run_bitboost` binary to run BitBoost from the command line:
 This only supports CSV input files.
 
 
-## Python Interface
-
-BitBoost has a [Scikit-learn](https://scikit-learn.org/stable/) interface. A number
-of examples are provided in the [examples](examples) folder.
-
 
 ## Parameters
 
 All the parameters can be found in [src/config.rs](src/config.rs). The supported
 objectives are in [src/objective.rs](src/objective.rs).
+
+In Python, you can refer to the parameter documentation as follows:
+
+```python
+import bitboost
+
+help(bitboost.BitBoost)
+```
 
 
 
@@ -112,13 +144,17 @@ objectives are in [src/objective.rs](src/objective.rs).
 Check out the [experiments](https://github.com/laudv/bitboost/tree/experiments)
 branch to see the experimental setup, or quickly navigate to the results for:
 
- - [Allsate](https://github.com/laudv/bitboost/blob/experiments/experiments/allstate/run-allstate.ipynb)
- - [CoverType](https://github.com/laudv/bitboost/blob/experiments/experiments/covtype/run-covtype.ipynb)
- - [Binary-MNIST](https://github.com/laudv/bitboost/blob/experiments/experiments/bin-mist/run-bin-mnist.ipynb)
- - [YouTube](https://github.com/laudv/bitboost/blob/experiments/experiments/youtube/run-youtube.ipynb)
+ - [Allsate][dsa]
+ - [CoverType][dsc]
+ - [Binary-MNIST][dsm]
+ - [YouTube][dsy]
 
 
 
+[dsa]: https://github.com/laudv/bitboost/blob/experiments/experiments/allstate/run-allstate.ipynb
+[dsc]: https://github.com/laudv/bitboost/blob/experiments/experiments/covtype/run-covtype.ipynb
+[dsm]: https://github.com/laudv/bitboost/blob/experiments/experiments/bin-mist/run-bin-mnist.ipynb
+[dsy]: https://github.com/laudv/bitboost/blob/experiments/experiments/youtube/run-youtube.ipynb
 
 [rustup]: https://rustup.rs
 [XGBoost]: https://xgboost.readthedocs.io
