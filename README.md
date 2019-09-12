@@ -7,7 +7,7 @@ BitBoost is a gradient boosting decision tree model similar to [XGBoost],
 represent discretized gradients and bitsets to represent the data vectors and
 the instance lists, with the goal of improving learning speed.
 
-BitBoost is able to beat the other boosting systems when a significant number of input features are categorical and have only few possible values (i.e., low cardinality). Here's are some numbers:
+BitBoost outperforms the other boosting systems when a significant number of input features are categorical and have only few possible values (i.e., low cardinality). Here's are some numbers:
 
 Time (seconds):
 
