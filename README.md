@@ -7,7 +7,7 @@ BitBoost is a gradient boosting decision tree model similar to [XGBoost],
 represent discretized gradients and bitsets to represent the data vectors and
 the instance lists, with the goal of improving learning speed.
 
-BitBoost outperforms the other boosting systems when a significant number of input features are categorical and have only few possible values (i.e., low cardinality). Here's are some numbers:
+BitBoost outperforms the other boosting systems in terms of training time when a significant number of input features are categorical and have only few possible values (i.e., low cardinality). Here are some numbers:
 
 Time (seconds):
 
@@ -20,7 +20,7 @@ Time (seconds):
 | CatBoost          | 82.6  | 58.1  | 52.9  | 16.5  | 33.6 |
 
 
-Accuracy (MAE, Accuracy%, Accuracy%, Accuracy%, MAE):
+Accuracy (MAE, Error%, Error%, Error%, MAE):
 
 |   | [Allstate][dsa] | [Covtype1][dsc] | [Covtype2][dsc] | [Bin-MNIST][dsm] | [YouTube][dsy] |
 |---|----------|----------|----------|-----------|---------|
@@ -30,7 +30,7 @@ Accuracy (MAE, Accuracy%, Accuracy%, Accuracy%, MAE):
 | XGBoost           | 1157  | 10.8  | 0.63  | 2.66  | 0.07 |
 | CatBoost          | 1167  | 13.1  | 0.91  | 3.23  | 0.11 |
 
-Click the column labels, or read the paper for more information.
+Click the column labels, or read the [paper for][paper] more information.
 
 
 ***Note:*** this is an experimental system, and
@@ -41,7 +41,18 @@ Click the column labels, or read the paper for more information.
  - BitBoost works best for low-cardinality categorical features,
  - BitBoost can handle high-cardinality categorical and numerical features efficiently given that (1) there are not too many and (2) only coarse-grained splits are required on those features, i.e., we can have high `sample_freq` and low `max_nbins` paramater values.
  
- Specifically, BitBoost will most likely perform worse on fully numerical datasets. In that case, use LightGBM, XGBoost or CatBoost instead.
+Specifically, BitBoost will most likely perform worse on fully numerical datasets. In that case, use LightGBM, XGBoost or CatBoost instead.
+
+## License
+
+&copy; [DTAI Research Group][dtai] - [KU Leuven][kul].
+Licensed under the Apache License 2.0.
+
+## Citing
+
+Please cite [this paper][paper]: 
+
+Devos, L., Meert, W., & Davis, J. (2019). Fast Gradient Boosting Decision Trees with Bit-Level Data Structures. In *Proceedings of ECML PKDD*. Springer.
 
 ## Compiling
 
@@ -161,3 +172,6 @@ branch to see the experimental setup, or quickly navigate to the results for:
 [LightGBM]: https://lightgbm.readthedocs.io
 [CatBoost]: https://catboost.ai
 [AVX2]: https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2
+[paper]: https://scholar.google.be/scholar?q=Fast+Gradient+Boosting+Decision+Trees+with+Bit-Level+Data+Structures+Devos+Meert+Davis
+[dtai]: https://dtai.cs.kuleuven.be
+[kul]: https://www.kuleuven.be/english
