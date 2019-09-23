@@ -1,14 +1,14 @@
-# Copyright (c) DTAI - KU Leuven - All rights reserved.
-# Proprietary, do not copy or distribute without permission.
-# Written by Laurens Devos, 2019
+# Copyright 2019 DTAI Research Group - KU Leuven.
+# License: Apache License 2.0
+# Author: Laurens Devos
 
 name = "bitboost"
 
 from .sklearn import BitBoost, BitBoostRegressor, BitBoostClassifier
 
 __author__ = "Laurens Devos"
-__copyright__ = "Copyright (c) DTAI - KU Leuven"
-#__license__ = "???" # TODO license
+__copyright__ = "Copyright 2019 DTAI Research Group - KU Leuven"
+__license__ = "Apache License 2.0"
 __all__ = [
     "BitBoost",
     "BitBoostRegressor",

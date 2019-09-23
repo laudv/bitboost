@@ -1,3 +1,7 @@
+# Copyright 2019 DTAI Research Group - KU Leuven.
+# License: Apache License 2.0
+# Author: Laurens Devos
+
 import os
 import setuptools
 import distutils
@@ -132,7 +136,7 @@ setuptools.setup(
     url="https://github.com/laudv/bitboost",
     packages=setuptools.find_packages(),
     python_requires='>=3.5',
-    license="???", # to be decided
+    license="Apache License 2.0",
     cmdclass={
         'build_rust': BuildRustCommand,
         "install": CustomInstall,
@@ -145,6 +149,6 @@ setuptools.setup(
         "Topic :: Scientific/Engineering",
         "Intended Audience :: Science/Research",
         "Development Status :: 3 - Alpha",
-        #"License :: ???",
+        "License :: OSI Approved :: Apache Software License",
     ]
 )
