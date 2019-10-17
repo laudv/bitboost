@@ -1,7 +1,7 @@
 [package]
 name = "bitboost"
 version = "0.1.0"
-authors = ["Laurens Devos <laurens.devos@outlook.com>"]
+authors = ["Laurens Devos"]
 autobenches = false
 edition = "2018"
 
