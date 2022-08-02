@@ -35,16 +35,9 @@ macro_rules! csa {
 unsafe trait HarleySealInternals {
     type Weights;
 
-    #[inline(always)]
     unsafe fn count_ones(v: __m256i) -> __m256i;
-
-    #[inline(always)]
-    unsafe fn vshiftl(a: __m256i, imm8: i32) -> __m256i;
-
-    #[inline(always)]
+    unsafe fn vshiftl<const IMM8: i32>(a: __m256i) -> __m256i;
     unsafe fn vadd(a: __m256i, b: __m256i) -> __m256i;
-
-    #[inline(always)]
     unsafe fn reduce_total(total: __m256i, ws: Self::Weights) -> u64;
 }
 
@@ -74,8 +67,8 @@ unsafe impl HarleySealInternals for Internals32 {
     }
 
     #[inline(always)]
-    unsafe fn vshiftl(a: __m256i, imm8: i32) -> __m256i {
-        _mm256_slli_epi32(a, imm8)
+    unsafe fn vshiftl<const IMM8: i32>(a: __m256i) -> __m256i {
+        _mm256_slli_epi32(a, IMM8)
     }
 
     #[inline(always)]
@@ -120,8 +113,8 @@ unsafe impl HarleySealInternals for Internals64 {
     }
 
     #[inline(always)]
-    unsafe fn vshiftl(a: __m256i, imm8: i32) -> __m256i {
-        _mm256_slli_epi64(a, imm8)
+    unsafe fn vshiftl<const IMM8: i32>(a: __m256i) -> __m256i {
+        _mm256_slli_epi64(a, IMM8)
     }
 
     #[inline(always)]
@@ -180,10 +173,10 @@ where LoadFn: Fn(&Input, usize) -> __m256i,
         i += 16;
     }
 
-    total = Internals::vshiftl(total, 4);
-    total = Internals::vadd(total, Internals::vshiftl(Internals::count_ones(b08), 3));
-    total = Internals::vadd(total, Internals::vshiftl(Internals::count_ones(b04), 2));
-    total = Internals::vadd(total, Internals::vshiftl(Internals::count_ones(b02), 1));
+    total = Internals::vshiftl::<4>(total);
+    total = Internals::vadd(total, Internals::vshiftl::<3>(Internals::count_ones(b08)));
+    total = Internals::vadd(total, Internals::vshiftl::<2>(Internals::count_ones(b04)));
+    total = Internals::vadd(total, Internals::vshiftl::<1>(Internals::count_ones(b02)));
     total = Internals::vadd(total,                    Internals::count_ones(b01)    );
 
     while i < n {
